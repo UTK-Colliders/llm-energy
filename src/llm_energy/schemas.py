@@ -147,6 +147,9 @@ class SessionPowerResult:
     alignment_uncertainty_j: float
     backend: str
     exit_code: int
+    # False when the sampler died mid-session: the session ids remain valid
+    # but every energy figure here must be ignored
+    power_ok: bool = True
     started_at: str = ""
     ended_at: str = ""
     # sessions whose transcript began inside the measured window

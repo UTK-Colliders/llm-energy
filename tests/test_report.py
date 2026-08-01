@@ -150,6 +150,25 @@ def test_negative_local_coordination_is_flagged():
     assert any("negative after subtraction" in n for n in lc.notes)
 
 
+def test_failed_power_sampling_yields_no_local_terms():
+    sp = make_session_power(net=3000.0)
+    sp.power_ok = False
+    t = Trial("run", make_task_result(), make_session_result(), session_power=sp)
+    assert local_coordination(sp, make_task_result()) is None
+    assert t.local_coordination() is None
+    assert t.total_coordination_band() is None
+
+
+def test_failed_power_sampling_is_explained_not_silently_dropped():
+    sp = make_session_power(net=3000.0)
+    sp.power_ok = False
+    sp.notes = ["power sampling failed (powermetrics exited early)"]
+    md = render_markdown(Trial("run", make_task_result(), make_session_result(),
+                               session_power=sp))
+    assert "E_coord,local" not in md.replace("E_coord,local is omitted", "")
+    assert "power sampling failed" in md
+
+
 def test_total_coordination_band_adds_measured_local_to_estimated_llm():
     t = Trial("run", make_task_result(net=500.0), make_session_result(2000.0),
               session_power=make_session_power(net=3000.0))

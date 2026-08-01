@@ -23,6 +23,23 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _load_or_die(loader, path: Path, what: str):
+    """Load a result file, turning malformed input into a clean CLI error.
+
+    `results/` is full of superficially similar JSON, so pointing a command at
+    the wrong file is a routine mistake and deserves a message, not a
+    traceback.
+    """
+    import json
+
+    try:
+        return loader(path)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"{path} is not valid JSON: {e}")
+    except (KeyError, TypeError, ValueError) as e:
+        raise click.ClickException(f"{path} is not a {what} result: {e}")
+
+
 def _resolve_baseline(baseline_arg: str, out: Path):
     """(BaselineResult | None, ref) from 'latest' | a path | 'none'."""
     from llm_energy import machine_info
@@ -254,10 +271,16 @@ def measure_session_cmd(command: tuple[str, ...], baseline_arg: str,
     # prefix deliberately not "session-": that glob belongs to analyze-session's
     # energy results, and scripts pick those up with `results/session-*.json`
     path = write_result(result, out / f"power-session-{_ts()}.json")
-    net = f", net {result.net_joules:.1f} J" if result.net_joules is not None else ""
-    console.print(f"session gross {result.gross_joules:.1f} J{net} over "
-                  f"{result.wall_time_s:.0f} s "
-                  f"(mean {result.mean_power_w:.2f} W) -> {path}")
+    if result.power_ok:
+        net = (f", net {result.net_joules:.1f} J"
+               if result.net_joules is not None else "")
+        console.print(f"session gross {result.gross_joules:.1f} J{net} over "
+                      f"{result.wall_time_s:.0f} s "
+                      f"(mean {result.mean_power_w:.2f} W) -> {path}")
+    else:
+        # never print 0.0 J as though it were a reading
+        console.print(f"[red]no usable energy figure for this session[/red] "
+                      f"({result.wall_time_s:.0f} s elapsed) -> {path}")
     if result.session_ids:
         console.print("linked session(s): " +
                       ", ".join(s[:8] for s in result.session_ids))
@@ -338,7 +361,7 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool,
     files: list[tuple[Path, str]] = [(p, p.stem) for p in transcripts]
 
     if for_task:
-        task = load_task_result(for_task)
+        task = _load_or_die(load_task_result, for_task, "task-run")
         if not task.coordinating_session_id:
             raise click.ClickException(
                 f"{for_task} has no coordinating_session_id — it was produced "
@@ -347,7 +370,8 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool,
         files.append(resolve(task.coordinating_session_id, str(for_task)))
 
     if for_session_power:
-        sp = load_session_power(for_session_power)
+        sp = _load_or_die(load_session_power, for_session_power,
+                          "session-power")
         if not sp.session_ids:
             raise click.ClickException(
                 f"{for_session_power} has no linked sessions — no transcript "
@@ -415,7 +439,7 @@ def find_task_result(session_power: Path, out: Path, show_all: bool):
     from llm_energy.pairing import find_task_results_for_sessions
     from llm_energy.schemas import load_session_power
 
-    sp = load_session_power(session_power)
+    sp = _load_or_die(load_session_power, session_power, "session-power")
     if not sp.session_ids:
         raise click.ClickException(
             f"{session_power} links no sessions — nothing to match against")
@@ -455,10 +479,14 @@ def report_cmd(task_result: Path, session_result: Path,
     from llm_energy.schemas import (load_session_power, load_session_result,
                                     load_task_result)
 
-    trial = Trial(label="run", task=load_task_result(task_result),
-                  session=load_session_result(session_result),
-                  session_power=(load_session_power(session_power)
-                                 if session_power else None))
+    trial = Trial(
+        label="run",
+        task=_load_or_die(load_task_result, task_result, "task-run"),
+        session=_load_or_die(load_session_result, session_result,
+                             "session-energy"),
+        session_power=(_load_or_die(load_session_power, session_power,
+                                    "session-power")
+                       if session_power else None))
     render_terminal(trial)
     if md:
         md.parent.mkdir(parents=True, exist_ok=True)
@@ -504,10 +532,13 @@ def compare_cmd(trial_specs: tuple[tuple[str, str, str], ...],
             raise click.ClickException(
                 f"--trial-power {label}: no --trial with that label "
                 f"(have: {', '.join(labels)})")
-        powers[label] = load_session_power(Path(p))
+        powers[label] = _load_or_die(load_session_power, Path(p),
+                                     "session-power")
 
-    trials = [Trial(label=label, task=load_task_result(Path(t)),
-                    session=load_session_result(Path(s)),
+    trials = [Trial(label=label,
+                    task=_load_or_die(load_task_result, Path(t), "task-run"),
+                    session=_load_or_die(load_session_result, Path(s),
+                                         "session-energy"),
                     session_power=powers.get(label))
               for label, t, s in trial_specs]
     if len(trials) < 2:

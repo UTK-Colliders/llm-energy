@@ -48,11 +48,18 @@ def run_task(task: TaskSpec,
     interval_s = interval_ms / 1000.0
     backend_start_mono = time.monotonic()
     backend.start(interval_ms, raw_path)
-    sleep_fn(2 * interval_s)
-
-    run = docker_util.run_container(task, image, run_dir)
-
-    sleep_fn(1 * interval_s)
+    try:
+        sleep_fn(2 * interval_s)
+        run = docker_util.run_container(task, image, run_dir)
+        sleep_fn(1 * interval_s)
+    except BaseException:
+        # Don't leave the sampler running: on macOS that is a root
+        # powermetrics process writing to disk indefinitely.
+        try:
+            backend.stop()
+        except Exception:
+            pass
+        raise
     trace = backend.stop()
 
     # Trace-relative window of the container run. t_rel 0 ≈ backend start;

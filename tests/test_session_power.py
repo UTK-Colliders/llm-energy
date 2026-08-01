@@ -109,3 +109,50 @@ def test_multiple_linked_sessions_are_flagged_and_kept(patched, monkeypatch, tmp
 def test_raw_trace_is_kept(patched, tmp_path):
     res = run(CannedBackend(10.0, 10), tmp_path)
     assert res.power_trace_file and Path(res.power_trace_file).exists()
+
+
+def test_sampler_is_stopped_when_the_child_cannot_launch(patched, tmp_path):
+    """Otherwise a root `sudo powermetrics` is left writing to disk forever."""
+    backend = CannedBackend(10.0, 10)
+    stopped = []
+    backend.stop = lambda: stopped.append(True) or backend.trace
+
+    def cannot_launch(cmd, cwd):
+        raise FileNotFoundError("claude")
+
+    with pytest.raises(FileNotFoundError):
+        run(backend, tmp_path, run_fn=cannot_launch)
+    assert stopped, "backend.stop() must run even when the child never started"
+
+
+def test_sampler_failure_keeps_the_session_link(patched, tmp_path):
+    """A session cannot be replayed — losing its ids to a sampler crash is worse
+    than losing the energy figure."""
+    backend = CannedBackend(10.0, 10)
+
+    def dying_stop():
+        raise RuntimeError("powermetrics exited early (rc=1)")
+    backend.stop = dying_stop
+
+    res = run(backend, tmp_path)
+    assert res.power_ok is False
+    assert res.session_ids == ["s1"]              # the recoverable half survives
+    assert res.net_joules is None
+    assert any("power sampling failed" in n for n in res.notes)
+
+
+def test_cwd_mismatch_falls_back_to_a_time_only_match(patched, monkeypatch,
+                                                      tmp_path):
+    """Transcripts record their own cwd, which differs under symlinks such as
+    macOS's /tmp -> /private/tmp."""
+    calls = []
+
+    def by_cwd(t0, t1, cwd=None, **kw):
+        calls.append(cwd)
+        return [] if cwd is not None else [session_info("elsewhere")]
+
+    monkeypatch.setattr(sp, "find_sessions_started_in_window", by_cwd)
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.session_ids == ["elsewhere"]
+    assert any("matched on time window alone" in n for n in res.notes)
+    assert calls == [tmp_path, None]

@@ -327,6 +327,7 @@ container logs kept per run for auditability:
 | `no task result ... was coordinated by session(s) ...` | the agent never got as far as `run-task` | read the session output; the brief tells it to run the task |
 | `no Claude Code session started inside the measured window` | the agent was resumed rather than started fresh | `measure-session` must wrap a *new* session; drop `--resume`/`--continue` |
 | `the task run does not lie inside the measured session window` | task and session came from different runs | re-pair with `find-task-result`, don't hand-pick files |
+| `no usable energy figure for this session` | the sampler died mid-session (usually sudo credentials expiring) | install the sudoers rule; the session's tokens are still recoverable — the result keeps its session ids |
 | `powermetrics exited early (rc=...)` | cached sudo credentials expired mid-run | install the sudoers rule — the default 5-min sudo timeout is shorter than a MadGraph run |
 | RAPL: `energy_uj not readable (needs root)` | kernels ≥ 5.10 restrict RAPL counters | run as root, or use `--backend tdp-model` |
 | `task exited with code N` | container failed; no partial result is written | read `results/run-<task>-<ts>/container.log` |

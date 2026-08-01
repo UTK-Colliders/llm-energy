@@ -61,12 +61,16 @@ class LocalCoordination:
 
 
 def local_coordination(sp: SessionPowerResult,
-                       task: TaskRunResult) -> LocalCoordination:
+                       task: TaskRunResult) -> LocalCoordination | None:
     """Subtract the nested task run from the session-window measurement.
 
     Uses net-of-baseline energy when both sides carry a baseline (the idle
     term must be removed from both windows or not at all); otherwise gross.
+    Returns None when the session's power sampling failed — those figures are
+    not a small error, they are meaningless, so there is nothing to report.
     """
+    if not sp.power_ok:
+        return None
     notes: list[str] = []
     if sp.net_joules is not None and task.net_joules is not None:
         session_j, task_j, basis = sp.net_joules, task.net_joules, "net of idle baseline"
@@ -112,6 +116,14 @@ class Trial:
         if self.session_power is None:
             return None
         return local_coordination(self.session_power, self.task)
+
+    def power_failure_note(self) -> str | None:
+        """Why the local terms are absent despite a session-power result."""
+        sp = self.session_power
+        if sp is None or sp.power_ok:
+            return None
+        return ("session power sampling failed, so E_coord,local is omitted; "
+                + "; ".join(sp.notes))
 
     def total_coordination_band(self) -> EnergyBand | None:
         """E_LLM (estimated remote) + E_coord,local (measured here)."""
@@ -255,6 +267,9 @@ def render_markdown(trial: Trial) -> str:
     if lc is not None:
         lines.append(f"- {LOCAL_COORD_CAVEAT}")
         lines += [f"- {n}" for n in lc.notes]
+    fail = trial.power_failure_note()
+    if fail:
+        lines.append(f"- {fail}")
     for n in trial.session.notes:
         lines.append(f"- {n}")
     return "\n".join(lines) + "\n"
@@ -327,6 +342,9 @@ def render_terminal(trial: Trial) -> None:
         table.add_row(k, v)
     console.print(table)
     lc = trial.local_coordination()
+    fail = trial.power_failure_note()
+    if fail:
+        console.print(f"[yellow]warning: {fail}[/yellow]")
     for n in (lc.notes if lc else []):
         console.print(f"[yellow]note: {n}[/yellow]")
     console.print("[dim]Caveats:[/dim]")
@@ -376,7 +394,8 @@ def render_comparison_terminal(trials: list[Trial], identity: EventIdentity,
 # --- chart ----------------------------------------------------------------
 
 def render_chart(trials: list[Trial], path: Path) -> None:
-    """Log-scale bar chart: E_task and E_LLM (central, low-high errorbar)."""
+    """Log-scale bar chart: E_task, E_LLM (central, low-high errorbar), and
+    E_coord,local where it was measured."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -389,12 +408,20 @@ def render_chart(trials: list[Trial], path: Path) -> None:
               for t in trials]
     llm_hi = [t.session.total_band.high_j - t.session.total_band.central_j
               for t in trials]
+    locals_ = [(t.local_coordination().joules if t.local_coordination() else 0.0)
+               for t in trials]
+    # a log axis cannot render a bar at or below zero
+    show_local = any(v > 0 for v in locals_)
 
     fig, ax = plt.subplots(figsize=(1.8 + 2.2 * len(trials), 4.5))
-    w = 0.38
-    ax.bar([i - w / 2 for i in x], task_e, w, label="E_task (measured)")
-    ax.bar([i + w / 2 for i in x], llm_c, w, yerr=[llm_lo, llm_hi], capsize=5,
-           label="E_LLM (estimated band)")
+    w = 0.26 if show_local else 0.38
+    off = w if show_local else w / 2
+    ax.bar([i - off for i in x], task_e, w, label="E_task (measured)")
+    ax.bar([i + (0.0 if show_local else off) for i in x], llm_c, w,
+           yerr=[llm_lo, llm_hi], capsize=5, label="E_LLM (estimated band)")
+    if show_local:
+        ax.bar([i + off for i in x], locals_, w,
+               label="E_coord,local (measured)")
     ax.set_yscale("log")
     ax.set_ylabel("Energy (J)")
     ax.set_xticks(list(x))

@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from llm_energy import machine_info
-from llm_energy.schemas import BaselineResult, SessionPowerResult, now_iso
+from llm_energy.schemas import (BaselineResult, PowerTrace, SessionPowerResult,
+                                now_iso)
 from llm_energy.session.locate import find_sessions_started_in_window
 
 
@@ -52,16 +53,37 @@ def measure_session(command: list[str],
     interval_s = interval_ms / 1000.0
     backend_start_mono = time.monotonic()
     backend.start(interval_ms, raw_path)
-    sleep_fn(2 * interval_s)
+    try:
+        sleep_fn(2 * interval_s)
+        t_start_wall = datetime.now(timezone.utc)
+        t0 = time.monotonic()
+        exit_code = run_fn(command, cwd)
+        t1 = time.monotonic()
+        t_end_wall = datetime.now(timezone.utc)
+        sleep_fn(1 * interval_s)
+    except BaseException:
+        # No session happened, so there is nothing to salvage — but the
+        # sampler must not be left running. On macOS that is a root
+        # powermetrics process writing to disk forever.
+        try:
+            backend.stop()
+        except Exception:
+            pass
+        raise
 
-    t_start_wall = datetime.now(timezone.utc)
-    t0 = time.monotonic()
-    exit_code = run_fn(command, cwd)
-    t1 = time.monotonic()
-    t_end_wall = datetime.now(timezone.utc)
-
-    sleep_fn(1 * interval_s)
-    trace = backend.stop()
+    notes: list[str] = []
+    power_ok = True
+    try:
+        trace = backend.stop()
+    except Exception as e:
+        # The session already happened and cannot be replayed. Keep the result
+        # so its session ids survive; mark the energy unusable.
+        power_ok = False
+        trace = PowerTrace(backend=getattr(backend, "name", "unknown"))
+        notes.append(
+            f"power sampling failed ({e}) — the energy figures for this "
+            "session are unusable, but the linked session ids are still valid, "
+            "so the token side can be recovered with analyze-session")
 
     wall_time_s = t1 - t0
     gross_j = trace.integrate_joules(t_start=t0 - backend_start_mono,
@@ -70,12 +92,19 @@ def measure_session(command: list[str],
 
     net_j = None
     baseline_mean_w = None
-    if baseline is not None:
+    if baseline is not None and power_ok:
         baseline_mean_w = baseline.mean_w
         net_j = gross_j - baseline.mean_w * wall_time_s
 
-    notes: list[str] = []
     sessions = find_sessions_started_in_window(t_start_wall, t_end_wall, cwd=cwd)
+    if not sessions and cwd is not None:
+        # A transcript records its own cwd, which can differ from ours through
+        # symlinks (/tmp vs /private/tmp on macOS). Widen rather than lose the
+        # link, and say that the match is weaker.
+        sessions = find_sessions_started_in_window(t_start_wall, t_end_wall)
+        if sessions:
+            notes.append(f"session matched on time window alone — the recorded "
+                         f"cwd differs from {cwd}")
     if not sessions:
         notes.append(
             "no Claude Code session started inside the measured window — the "
@@ -95,6 +124,7 @@ def measure_session(command: list[str],
         mean_power_w=mean_w,
         alignment_uncertainty_j=mean_w * interval_s,
         backend=trace.backend,
+        power_ok=power_ok,
         exit_code=exit_code,
         started_at=t_start_wall.isoformat(),
         ended_at=t_end_wall.isoformat(),

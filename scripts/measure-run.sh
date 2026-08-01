@@ -56,6 +56,10 @@ BACKEND_ARGS=()
 [ -n "$BACKEND" ] && BACKEND_ARGS=(--backend "$BACKEND")
 LABEL=${LABEL:-${MODEL:-run}}
 
+# macOS ships bash 3.2, where "${arr[@]}" on an EMPTY array trips `set -u`
+# with "unbound variable". Every BACKEND_ARGS use below goes through the
+# ${arr[@]+...} guard so the script survives its own primary platform.
+
 # 1. Preflight ---------------------------------------------------------------
 step "Preflight"
 uv run llm-energy doctor || die "doctor failed — fix the above before measuring"
@@ -65,24 +69,45 @@ uv run llm-energy doctor || die "doctor failed — fix the above before measurin
 # image inside the measured window, charging a 10-20 minute build to the
 # agent's coordination energy.
 step "Ensuring the task image exists"
-IMAGE_TAG=$(uv run python -c "
+# Goes through the harness's own ensure_image so build- and pull-type variants
+# are both handled exactly as run-task would handle them. The task name is
+# passed as argv, not interpolated into the source.
+uv run python - "$TASK" <<'PY'
+import sys
 from pathlib import Path
 from llm_energy.config import find_task
-print(find_task('$TASK', Path('tasks')).image().tag)
-")
-if docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-  echo "$IMAGE_TAG already built"
-else
-  echo "building $IMAGE_TAG (this is excluded from the measurement)"
-  docker build -t "$IMAGE_TAG" "tasks/$TASK"
-fi
+from llm_energy.docker_util import ensure_image, image_exists
+
+image = find_task(sys.argv[1], Path("tasks")).image()
+if image_exists(image.tag):
+    print(f"{image.tag} already present")
+else:
+    print(f"preparing {image.tag} (excluded from the measurement)")
+    ensure_image(image)
+PY
 
 # 3. Baseline ----------------------------------------------------------------
 if [ "$SKIP_BASELINE" -eq 1 ]; then
   step "Skipping baseline (reusing the newest one for this machine)"
+  # The agent's run-task defaults to --baseline latest. Without a matching
+  # baseline it fails mid-session, wasting the whole measured run — so check
+  # now, before any tokens are spent.
+  uv run python - <<'PY' || die "no baseline recorded for this machine — drop --skip-baseline"
+import sys
+from pathlib import Path
+from llm_energy import machine_info
+from llm_energy.baseline import find_latest_baseline
+
+found = find_latest_baseline(Path("results"),
+                             machine_info.collect(include_docker=False))
+print(f"reusing {found}" if found else "", end="")
+sys.exit(0 if found else 1)
+PY
+  echo
 else
   step "Idle baseline (${BASELINE_SECONDS}s) — leave the machine alone"
-  uv run llm-energy baseline --duration "$BASELINE_SECONDS" "${BACKEND_ARGS[@]}"
+  uv run llm-energy baseline --duration "$BASELINE_SECONDS" \
+    "${BACKEND_ARGS[@]+"${BACKEND_ARGS[@]}"}"
 fi
 
 # 4. The measured session ----------------------------------------------------
@@ -96,12 +121,14 @@ else
 fi
 
 step "Measured coordination session${MODEL:+ (model: $MODEL)}"
-uv run llm-energy measure-session "${BACKEND_ARGS[@]}" -- claude "${CLAUDE_ARGS[@]}"
+uv run llm-energy measure-session "${BACKEND_ARGS[@]+"${BACKEND_ARGS[@]}"}" \
+  -- claude "${CLAUDE_ARGS[@]}"
 
 # 5. Pair the artifacts ------------------------------------------------------
 step "Pairing results"
-SESSION_POWER=$(ls -t results/power-session-*.json 2>/dev/null | head -1) \
-  || die "no session-power result was written"
+# `|| die` on this assignment would be dead code: the pipeline's status is
+# head's, which is 0 even when ls finds nothing. Test the value instead.
+SESSION_POWER=$(ls -t results/power-session-*.json 2>/dev/null | head -1)
 [ -n "$SESSION_POWER" ] || die "no session-power result was written"
 
 TASK_RESULT=$(uv run llm-energy find-task-result "$SESSION_POWER") \
