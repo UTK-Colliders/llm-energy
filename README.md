@@ -7,9 +7,21 @@ This tool measures both sides for tasks in a HEP research workflow. First
 benchmark: MadGraph5_aMC@NLO generating 10,000 `p p > t t~` events at
 √s = 13.6 TeV (LO, unweighted LHE output) in a Docker container.
 
+A measured run is one command. It takes an idle baseline, starts a *fresh*
+Claude Code session on the task brief, measures everything that session does,
+and reports:
+
+```sh
+scripts/measure-run.sh
+```
+
+Three energies come out of it:
+
 - **E_task** is *measured* on a dedicated Mac: Apple Silicon package power
   (`sudo powermetrics`) integrated over the container's run, minus an idle
   baseline.
+- **E_coord,local** is *measured* the same way over the whole agent session,
+  minus the nested task run — this machine's cost of the agent working.
 - **E_LLM** is *estimated* from the Claude Code session that coordinated the
   task: token counts parsed from the session transcript, converted to Joules
   via literature-derived coefficients (Epoch AI 2025, Google's Gemini
@@ -164,49 +176,105 @@ fine for checking the plumbing, not for results.
 On the measurement Mac, with setup complete:
 
 ```sh
+scripts/measure-run.sh
+```
+
+That is the whole thing. It runs `doctor`, makes sure the task image is built
+(*before* the measurement starts, so a 10–20 min build is never charged to the
+agent), takes a 2-minute idle baseline, starts a fresh headless Claude Code
+session pointed at the task brief, measures package power for as long as that
+session runs, then pairs the artifacts and writes a report. Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--model NAME` | pass a model to `claude` — one flag per cross-model trial |
+| `--interactive` | supervise the session instead of running it headless |
+| `--skip-baseline` | reuse the newest baseline for this machine |
+| `--task NAME` | a different task under `tasks/` |
+
+### What the agent is told
+
+The session is started with nothing but *"read
+`tasks/<task>/BRIEF.md` and do the job it describes."* Two files define its
+behaviour, and both are part of the experiment:
+
+- [`CLAUDE.md`](CLAUDE.md) — loaded automatically. It tells a session whether
+  it is the measured coordinating agent or a harness developer, and bars the
+  agent from running the operator's instruments (`baseline`,
+  `analyze-session`, `report`, …). Without that boundary the session spends
+  its tokens measuring itself.
+- [`tasks/madgraph-ttbar-lhe/BRIEF.md`](tasks/madgraph-ttbar-lhe/BRIEF.md) —
+  the job: the required physics, how to run it, how to verify the output, and
+  what to do if it fails.
+
+### Doing it by hand
+
+The script is four commands in a trench coat, if you'd rather drive them:
+
+```sh
 # 1. Idle baseline (~2 min). Quiesce the machine; leave Docker running idle.
 uv run llm-energy baseline --duration 120
 
-# 2. Do the task interactively in Claude Code — this session IS the
-#    coordination being measured. Start it in this repo:
-claude
-#    ...and ask it to generate the events. The session ends with the LLM
-#    invoking the measured run itself:
-#        uv run llm-energy run-task madgraph-ttbar-lhe
+# 2. Run the agent under power measurement. Everything it does counts.
+uv run llm-energy measure-session -- \
+  claude -p "Read tasks/madgraph-ttbar-lhe/BRIEF.md and do the job it describes."
 
-# 3. Convert the coordination session's tokens to an energy band:
-uv run llm-energy analyze-session --latest
+# 3. Pair the artifacts. The task result carries the id of the session that
+#    invoked it, so this is exact rather than newest-file guesswork.
+POWER=$(ls -t results/power-session-*.json | head -1)
+TASK=$(uv run llm-energy find-task-result "$POWER")
+uv run llm-energy analyze-session --for-task "$TASK" --out-file results/session-energy.json
 
-# 4. Compare the two sides:
-TASK=$(ls -t results/task-madgraph-ttbar-lhe-*.json | head -1)
-SESSION=$(ls -t results/session-*.json | head -1)
-uv run llm-energy report "$TASK" "$SESSION" --md results/report.md
+# 4. Report all three energies.
+uv run llm-energy report "$TASK" results/session-energy.json \
+                         --session-power "$POWER" --md results/report.md
 ```
 
-Step 3 picks the newest transcript. If the coordination spanned several
-sessions (resumed or compacted), list them and merge explicitly:
+If a coordination episode spanned several sessions (resumed or compacted),
+merge them explicitly:
 
 ```sh
 uv run llm-energy list-sessions --cwd "$PWD"
 uv run llm-energy analyze-session --session-id a1b2c3d4 --session-id e5f6a7b8
 ```
 
-Each run writes a timestamped JSON to `results/`, plus a
+Each run writes timestamped JSON to `results/`, plus a
 `results/run-madgraph-ttbar-lhe-<ts>/` directory holding the raw power trace,
 the container log, and the MadGraph output tree
 (`proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz`).
 
+### How the pieces are linked
+
+Claude Code exports `CLAUDE_CODE_SESSION_ID` into every subprocess it spawns,
+and its value is the transcript's filename. So when the agent invokes
+`run-task`, the harness records *which conversation asked for it* in the task
+result. `analyze-session --for-task` then analyses exactly that session.
+
+This matters more than it sounds. `--latest` sorts every transcript on the
+machine by mtime: run it from a second Claude session and you measure that
+session instead, silently. Prefer `--for-task` whenever a task result exists.
+
 ## Comparing LLM models
 
-Repeat the workflow once per model (e.g. switch the model in Claude Code),
-then line the trials up — including a verdict on whether the models produced
-physically identical events (the run card pins `iseed`, so identical events
-are the expected outcome on the same image):
+One run per model — same brief, same pinned physics, different coordinator:
+
+```sh
+scripts/measure-run.sh --model claude-fable-5 --label fable --skip-baseline
+scripts/measure-run.sh --model claude-haiku-4-5-20251001 --label haiku --skip-baseline
+```
+
+Take a fresh baseline for the first run and reuse it for the rest, so all
+trials are netted against the same idle figure. Each run prints its artifact
+paths at the end; feed them to `compare`, which lines the trials up and
+verdicts whether they produced physically identical events (the run card pins
+`iseed`, so identical events are the expected outcome on the same image):
 
 ```sh
 uv run llm-energy compare \
   --trial fable  results/task-...-a.json results/session-aa...json \
   --trial haiku  results/task-...-b.json results/session-bb...json \
+  --trial-power fable results/power-session-a.json \
+  --trial-power haiku results/power-session-b.json \
   --md results/comparison.md
 
 # or directly on LHE files:
@@ -224,16 +292,26 @@ timestamps/hostnames are ignored) and falls back to numeric comparison with
 | Command | Purpose |
 |---|---|
 | `doctor` | Preflight: power backend, sudo, docker, task config, coefficients |
-| `baseline` | Measure idle package power (subtracted from task runs) |
+| `baseline` | Measure idle package power (subtracted from every other measurement) |
 | `run-task TASK` | Run a task container under energy measurement |
+| `measure-session [-- CMD]` | Measure package power for a whole agent session (default `claude`) |
 | `list-sessions` | List Claude Code sessions on this machine |
-| `analyze-session` | Token counts → energy band for a session (merge with repeated `--session-id`) |
-| `report` | One task run vs. one coordination session |
+| `analyze-session` | Token counts → energy band (`--for-task` pairs exactly; merge with repeated `--session-id`) |
+| `find-task-result` | The task run a `measure-session` result coordinated |
+| `report` | Task run vs. coordination session, plus `--session-power` for local cost |
 | `compare` | Multiple model trials side by side + event identity |
 | `verify-events` | Check LHE files for identical physics events |
 
 Results land in `results/` as timestamped JSON, with raw power traces and
-container logs kept per run for auditability.
+container logs kept per run for auditability:
+
+| File | What it holds |
+|---|---|
+| `baseline-<ts>.json` | idle package power for this machine |
+| `task-<task>-<ts>.json` | E_task, plus the id of the session that invoked it |
+| `power-session-<ts>.json` | E over the whole agent session, plus its session ids |
+| `session-<id>-<ts>.json` | tokens and the E_LLM band |
+| `run-<task>-<ts>/` | raw power trace, container log, MadGraph output tree |
 
 ## Troubleshooting
 
@@ -245,6 +323,10 @@ container logs kept per run for auditability.
 | `image ... EMULATED, energy will be distorted` | amd64 image on Apple Silicon | drop `--image-variant scailfin`; the default `native` variant builds for the host |
 | `no baseline for this machine in results/` | no baseline recorded on this host (matched by chip + hostname) | run `llm-energy baseline` first, or pass `--baseline none` |
 | `no sessions found (is ~/.claude/projects present?)` | Claude Code hasn't run locally, or transcripts live elsewhere | coordinate in the local CLI (web sessions leave no local transcript); set `CLAUDE_CONFIG_DIR` if your config dir is non-standard |
+| `has no coordinating_session_id` | `run-task` ran outside a Claude Code session, or the result predates the stamp | pass `--session-id` explicitly |
+| `no task result ... was coordinated by session(s) ...` | the agent never got as far as `run-task` | read the session output; the brief tells it to run the task |
+| `no Claude Code session started inside the measured window` | the agent was resumed rather than started fresh | `measure-session` must wrap a *new* session; drop `--resume`/`--continue` |
+| `the task run does not lie inside the measured session window` | task and session came from different runs | re-pair with `find-task-result`, don't hand-pick files |
 | `powermetrics exited early (rc=...)` | cached sudo credentials expired mid-run | install the sudoers rule — the default 5-min sudo timeout is shorter than a MadGraph run |
 | RAPL: `energy_uj not readable (needs root)` | kernels ≥ 5.10 restrict RAPL counters | run as root, or use `--backend tdp-model` |
 | `task exited with code N` | container failed; no partial result is written | read `results/run-<task>-<ts>/container.log` |

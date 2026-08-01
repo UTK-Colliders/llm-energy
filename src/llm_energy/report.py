@@ -260,6 +260,16 @@ def render_markdown(trial: Trial) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _local_cell(t: Trial) -> str:
+    lc = t.local_coordination()
+    return f"{lc.joules:.1f}" if lc else "n/a"
+
+
+def _total_central_cell(t: Trial) -> str:
+    band = t.total_coordination_band()
+    return f"{band.central_j:.0f}" if band else "n/a"
+
+
 def render_comparison_markdown(trials: list[Trial], identity: EventIdentity,
                                rtol: float) -> str:
     lines = ["# llm-energy model comparison", ""]
@@ -281,6 +291,9 @@ def render_comparison_markdown(trials: list[Trial], identity: EventIdentity,
     row("Task wall time (s)", lambda t: f"{t.task.wall_time_s:.1f}")
     row("E_task (J)", lambda t: f"{t.task_energy_j():.1f}")
     row("E_LLM/E_task (central)", lambda t: f"{t.ratio_band()[1]:.2f}")
+    if any(t.session_power for t in trials):
+        row("E_coord,local (J)", _local_cell)
+        row("E_coord,total central (J)", _total_central_cell)
     row("LHE events", lambda t: str((t.lhe_fingerprint() or ("", "n/a", ""))[1]))
     row("Event hash (short)",
         lambda t: (t.lhe_fingerprint() or ("", 0, "n/a"))[2][:12])
@@ -343,6 +356,9 @@ def render_comparison_terminal(trials: list[Trial], identity: EventIdentity,
     row("Task wall (s)", lambda t: f"{t.task.wall_time_s:.1f}")
     row("E_task (J)", lambda t: f"{t.task_energy_j():.1f}")
     row("E_LLM/E_task", lambda t: f"{t.ratio_band()[1]:.2f}")
+    if any(t.session_power for t in trials):
+        row("E_coord,local (J)", _local_cell)
+        row("E_coord,total (J)", _total_central_cell)
     row("Event hash", lambda t: (t.lhe_fingerprint() or ("", 0, "n/a"))[2][:12])
     console.print(table)
 

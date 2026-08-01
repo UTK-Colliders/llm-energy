@@ -189,3 +189,17 @@ def test_comparison_markdown():
     assert "| fable |" in md.replace("Quantity | fable", "| fable |") or "fable" in md
     assert "IDENTICAL" in md
     assert "E_LLM/E_task" in md
+    # no trial carries session power, so the local rows stay out entirely
+    assert "E_coord,local" not in md
+
+
+def test_comparison_markdown_with_partial_session_power():
+    trials = [Trial("fable", make_task_result(net=500.0),
+                    make_session_result(2000.0),
+                    session_power=make_session_power(net=3000.0)),
+              Trial("haiku", make_task_result(net=500.0),
+                    make_session_result(800.0))]
+    md = render_comparison_markdown(trials, check_event_identity(trials), rtol=1e-9)
+    assert "E_coord,local" in md
+    assert "2500.0" in md          # fable's measured local cost
+    assert "n/a" in md             # haiku has no session-power result

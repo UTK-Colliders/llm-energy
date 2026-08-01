@@ -473,11 +473,15 @@ def report_cmd(task_result: Path, session_result: Path,
 @click.option("--trial", "trial_specs", multiple=True, required=True, nargs=3,
               metavar="LABEL TASK.json SESSION.json",
               help="repeat for each model/trial being compared")
+@click.option("--trial-power", "trial_power_specs", multiple=True, nargs=2,
+              metavar="LABEL POWER.json",
+              help="attach a measure-session result to a trial, by label")
 @click.option("--rtol", default=1e-9, show_default=True,
               help="relative tolerance for numeric event comparison")
 @click.option("--md", type=click.Path(path_type=Path), default=None)
 @click.option("--chart", type=click.Path(path_type=Path), default=None)
-def compare_cmd(trial_specs: tuple[tuple[str, str, str], ...], rtol: float,
+def compare_cmd(trial_specs: tuple[tuple[str, str, str], ...],
+                trial_power_specs: tuple[tuple[str, str], ...], rtol: float,
                 md: Path | None, chart: Path | None):
     """Compare trials coordinated by different LLM models, including whether
     their output events are identical.
@@ -490,10 +494,21 @@ def compare_cmd(trial_specs: tuple[tuple[str, str, str], ...], rtol: float,
     from llm_energy.report import (Trial, check_event_identity, render_chart,
                                    render_comparison_markdown,
                                    render_comparison_terminal)
-    from llm_energy.schemas import load_session_result, load_task_result
+    from llm_energy.schemas import (load_session_power, load_session_result,
+                                    load_task_result)
+
+    labels = [label for label, _, _ in trial_specs]
+    powers = {}
+    for label, p in trial_power_specs:
+        if label not in labels:
+            raise click.ClickException(
+                f"--trial-power {label}: no --trial with that label "
+                f"(have: {', '.join(labels)})")
+        powers[label] = load_session_power(Path(p))
 
     trials = [Trial(label=label, task=load_task_result(Path(t)),
-                    session=load_session_result(Path(s)))
+                    session=load_session_result(Path(s)),
+                    session_power=powers.get(label))
               for label, t, s in trial_specs]
     if len(trials) < 2:
         raise click.ClickException("need at least two --trial entries to compare")

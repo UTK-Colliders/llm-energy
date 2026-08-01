@@ -8,11 +8,14 @@ itself? The first benchmark task is MadGraph5_aMC@NLO generating 10,000
 `p p > t t~` events at √s = 13.6 TeV at leading order, producing unweighted
 LHE files, in a Docker container on a dedicated Mac.
 
-Two quantities are kept in deliberately separate pipelines that only meet at
+Three quantities are kept in deliberately separate pipelines that only meet at
 the report stage:
 
 - **E_task** — *measured*: Apple Silicon SoC package power integrated over the
   container's wall-time window, optionally net of an idle baseline.
+- **E_coord,local** — *measured*: the same package power integrated over the
+  whole coordination session, minus the nested task run. This is what the
+  agent costs *this* machine while it works.
 - **E_LLM** — *estimated*: token counts from the interactive Claude Code
   session that coordinated the task, converted to Joules through
   literature-derived coefficients, reported as a low/central/high envelope
@@ -118,7 +121,65 @@ periodic `docker stats` snapshots as diagnostics.
 - MG5 version is pinned; the scailfin variant ships MG5 3.5.1, so event
   identity across image variants is *not* expected — only within a variant.
 
+## Local coordination energy (E_coord,local)
+
+### Measurement
+
+`llm-energy measure-session` wraps the agent process itself in the same
+power measurement used for task runs: sampling starts ~2 intervals before the
+child launches, stops ~1 interval after it exits, and the integral is
+restricted to the child's wall-time window. The measured task run happens
+*inside* that window, so
+
+    E_coord,local = E_session − E_task
+
+with both terms net of the idle baseline when both carry one, and gross
+otherwise — the idle term must be removed from both windows or from neither.
+The report flags three ways this subtraction can be invalid: the two runs
+having used different power backends, the task window not lying inside the
+session window, and a negative result.
+
+This closes a gap the token-only pipeline leaves open. E_LLM covers estimated
+*remote* inference; it says nothing about the laptop running hot for forty
+minutes while the agent reads files and runs commands. E_coord,local is
+measured on the same instrument as E_task, so those two are directly
+comparable in a way E_LLM never is.
+
+### The image build is excluded
+
+Building the MG5 image takes 10–20 minutes. `run_task` builds before power
+sampling starts, so it never lands in E_task — but under session-window
+measurement an unbuilt image *would* land in E_coord,local, dwarfing it.
+`scripts/measure-run.sh` therefore ensures the image exists before the session
+begins.
+
+### What is still excluded
+
+Wall-plug power (the package excludes display, most DRAM, SSD, PSU losses),
+the network path to the provider, and the researcher's own time. E_coord,local
+is a lower bound on the local cost, in the same direction as E_task.
+
 ## LLM energy (E_LLM)
+
+### Attributing a session to a run
+
+Claude Code exports `CLAUDE_CODE_SESSION_ID` into every subprocess it spawns,
+and its value is the transcript's filename stem. When the coordinating agent
+invokes `run-task`, the harness records that id in the task result, so
+`analyze-session --for-task` reads the exact conversation that drove the run.
+
+This replaces selecting the newest transcript by mtime, which is wrong in a
+way that does not announce itself: running the analysis from a second Claude
+session measures *that* session instead. `measure-session` cannot use the env
+var — it starts the agent, so the child's id does not exist yet — and instead
+attributes sessions whose transcript's first record falls inside the measured
+window.
+
+The protocol the harness assumes: the coordinating session is **fresh**, does
+only the job described in `tasks/<name>/BRIEF.md`, and runs none of the
+measurement commands. `CLAUDE.md` states those constraints to the agent. A
+session that measures itself inflates E_LLM with the cost of measurement,
+which is not what the study is asking about.
 
 ### Token accounting
 
@@ -200,7 +261,8 @@ verdicts whether the trials produced **identical physics output**:
 1. E_task is SoC package energy; E_LLM is estimated total datacenter energy
    including PUE — the LLM side is charged for overheads the task side is
    not. This biases the comparison *against* the LLM, which is the
-   conservative direction for the study's question.
+   conservative direction for the study's question. E_coord,local is the one
+   term measured on the same footing as E_task.
 2. The E_LLM band is a modeling envelope, not a confidence interval.
 3. Embodied energy and training energy are excluded on both sides.
 4. Runs under emulation are flagged and should not be used for headline
