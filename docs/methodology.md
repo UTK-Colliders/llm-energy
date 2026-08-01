@@ -163,6 +163,64 @@ unchanged, so results already collected under it remain comparable.
 - MG5 version is pinned; the scailfin variant ships MG5 3.5.1, so event
   identity across image variants is *not* expected — only within a variant.
 
+## What the agent is asked to do
+
+The question is what an LLM spends *coordinating* a task, so what counts as
+coordination decides what the study measures. Two task kinds bracket it.
+
+A **pinned** task (`madgraph-ttbar-lhe`) hands the agent a working run card and
+the command to run. Its session cost is the cost of executing a known
+solution: reading a runbook, invoking one command, checking a number. That is
+a floor, not the quantity of interest, and it barely separates one model from
+another.
+
+An **open** task (`madgraph-ttbar-open`) states only the required output —
+process, order, beam energy, event count, seed, format — and leaves the method
+to the agent, which must work out that it needs MadGraph, how to obtain it,
+what card to write, how to invoke it, and how to check the result. The
+difference between the two isolates the cost of solving.
+
+### Isolation
+
+An open run happens in a scratch workspace outside this repository, containing
+only the brief. This is a measurement requirement, not tidiness:
+`tasks/madgraph-ttbar-lhe/cards/ttbar_lhe.mg5` is a complete worked solution,
+and an agent working in the repository could find it — correctly and
+helpfully — collapsing the open task back into the pinned one. Isolation also
+puts the harness's own commands out of reach, so an open session cannot
+measure itself.
+
+No image is provided either: obtaining a generator is part of the job.
+
+### Measuring what the harness did not launch
+
+With the method unpinned, the harness no longer starts the containers, so it
+cannot time them directly. It records the Docker daemon's event stream for the
+session and pairs container start/stop events into windows, regardless of who
+started them. Energy is then attributed as:
+
+- **E_compute** — integrated over the *union* of observed container windows,
+  so concurrent containers are counted once and the figure stays subtractable;
+- **E_coord,local** — the rest of the session window.
+
+Limits, stated in every open report: work run outside a container lands in the
+coordination bucket; a container still running when the session ends is
+reported rather than attributed; and if the Docker event stream is
+unavailable, the session total is still valid but the split is not made.
+
+### Correctness as an outcome
+
+When the agent chooses the method, the output can be wrong, so an open run's
+energy is only meaningful beside a verdict on whether it delivered.
+`verify-deliverable` checks the LHE payload — the `<init>` block's beam PDG ids
+and energies, the event count, and the final-state PDG ids of every event —
+rather than the MG5 banner, which is free text the agent could have produced
+by any route. A sample generated unconventionally still passes; a plausible
+banner over the wrong physics still fails.
+
+Runs that fail are kept. A model that spends heavily and produces nothing
+usable is a data point about that model, not an absent measurement.
+
 ## Local coordination energy (E_coord,local)
 
 ### Measurement

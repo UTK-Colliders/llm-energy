@@ -156,3 +156,104 @@ def test_cwd_mismatch_falls_back_to_a_time_only_match(patched, monkeypatch,
     assert res.session_ids == ["elsewhere"]
     assert any("matched on time window alone" in n for n in res.notes)
     assert calls == [tmp_path, None]
+
+
+# --- observing the agent's own containers -------------------------------------
+
+class FakeEvents:
+    """Stands in for the docker event stream with a scripted set of windows."""
+
+    def __init__(self, windows, ok=True):
+        self.windows, self.ok = windows, ok
+
+    def __call__(self, out_path):
+        return self
+
+    def start(self):
+        return self.ok
+
+    def stop(self):
+        return self.windows
+
+
+def window(start_offset, end_offset, cid="abc", image="mg5:1"):
+    """Offsets are seconds after the session's own start."""
+    from datetime import timedelta
+    from llm_energy.docker_events import ContainerWindow
+    base = _SESSION_START[0]
+    return ContainerWindow(
+        container_id=cid, image=image,
+        started_at=base + timedelta(seconds=start_offset),
+        ended_at=None if end_offset is None else base + timedelta(seconds=end_offset))
+
+
+_SESSION_START = [None]
+
+
+@pytest.fixture
+def with_events(patched, monkeypatch):
+    """Pin the session's wall-clock start so container offsets are meaningful."""
+    from datetime import datetime, timezone
+    start = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+    _SESSION_START[0] = start
+
+    class FixedClock:
+        def now(self, tz=None):
+            return start
+    monkeypatch.setattr(sp, "datetime", FixedClock())
+    return start
+
+
+def install(monkeypatch, windows, ok=True):
+    monkeypatch.setattr(sp, "DockerEventRecorder", FakeEvents(windows, ok=ok))
+
+
+def test_container_energy_is_attributed_from_observed_windows(
+        with_events, monkeypatch, tmp_path):
+    # session occupies trace seconds [2,6]; one container runs [1,3] s into it,
+    # i.e. trace seconds [3,5] -> 2 s at 10 W = 20 J
+    install(monkeypatch, [window(1, 3)])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+
+    assert res.container_joules == pytest.approx(20.0)
+    assert res.container_wall_s == pytest.approx(2.0)
+    assert len(res.containers) == 1
+    assert res.containers[0].image == "mg5:1"
+    assert res.containers[0].gross_joules == pytest.approx(20.0)
+
+
+def test_outside_container_energy_is_the_remainder(with_events, monkeypatch,
+                                                   tmp_path):
+    install(monkeypatch, [window(1, 3)])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    # 40 J over the whole session, 20 J of it inside the container
+    assert res.gross_joules == pytest.approx(40.0)
+    assert res.outside_container_joules() == pytest.approx(20.0)
+
+
+def test_overlapping_containers_are_not_double_counted(with_events, monkeypatch,
+                                                       tmp_path):
+    install(monkeypatch, [window(0, 3, cid="a"), window(1, 4, cid="b")])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    # union is [0,4] of the session = 4 s at 10 W, not 3+3
+    assert res.container_joules == pytest.approx(40.0)
+    assert len(res.containers) == 2
+
+
+def test_container_still_running_at_session_end_is_flagged_not_counted(
+        with_events, monkeypatch, tmp_path):
+    install(monkeypatch, [window(1, None)])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    assert res.containers == []
+    assert res.container_joules == pytest.approx(0.0)
+    assert any("still" in n and "running" in n for n in res.notes)
+
+
+def test_no_docker_means_no_split_but_a_valid_total(with_events, monkeypatch,
+                                                    tmp_path):
+    install(monkeypatch, [], ok=False)
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    assert res.gross_joules == pytest.approx(40.0)
+    assert res.container_joules is None
+    assert res.outside_container_joules() is None
+    assert any("docker event stream unavailable" in n for n in res.notes)

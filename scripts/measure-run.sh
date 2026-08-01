@@ -52,6 +52,14 @@ BRIEF="tasks/$TASK/BRIEF.md"
 [ -f "$BRIEF" ] || die "no brief at $BRIEF — the agent needs one to follow"
 command -v claude >/dev/null || die "the 'claude' CLI is not on PATH"
 
+# An "open" task states the goal and nothing else: the agent works out the
+# method itself. That only measures anything if it cannot read the answer, so
+# an open run happens in a scratch workspace *outside* this repo — where
+# tasks/madgraph-ttbar-lhe/cards/ttbar_lhe.mg5 is a complete worked solution
+# that any competent agent would rightly find and use.
+OPEN=0
+[ -f "tasks/$TASK/spec.yaml" ] && OPEN=1
+
 BACKEND_ARGS=()
 [ -n "$BACKEND" ] && BACKEND_ARGS=(--backend "$BACKEND")
 LABEL=${LABEL:-${MODEL:-run}}
@@ -68,6 +76,13 @@ uv run llm-energy doctor || die "doctor failed — fix the above before measurin
 # Must happen BEFORE the session starts. run-task would otherwise build the
 # image inside the measured window, charging a 10-20 minute build to the
 # agent's coordination energy.
+#
+# An open task has no harness-provided image: obtaining a generator is part of
+# what the agent has to work out, and whatever it pulls or builds is measured
+# along with everything else it does.
+if [ "$OPEN" -eq 1 ]; then
+  step "Open task — no image is provided; the agent sources its own"
+else
 step "Ensuring the task image exists"
 # Goes through the harness's own ensure_image so build- and pull-type variants
 # are both handled exactly as run-task would handle them. The task name is
@@ -85,13 +100,14 @@ else:
     print(f"preparing {image.tag} (excluded from the measurement)")
     ensure_image(image)
 PY
+fi
 
 # 3. Baseline ----------------------------------------------------------------
 if [ "$SKIP_BASELINE" -eq 1 ]; then
   step "Skipping baseline (reusing the newest one for this machine)"
-  # The agent's run-task defaults to --baseline latest. Without a matching
-  # baseline it fails mid-session, wasting the whole measured run — so check
-  # now, before any tokens are spent.
+  # A pinned task's run-task defaults to --baseline latest; without a matching
+  # baseline it fails mid-session, wasting the whole measured run. Check now,
+  # before any tokens are spent.
   uv run python - <<'PY' || die "no baseline recorded for this machine — drop --skip-baseline"
 import sys
 from pathlib import Path
@@ -111,7 +127,23 @@ else
 fi
 
 # 4. The measured session ----------------------------------------------------
-PROMPT="Read $BRIEF and do the job it describes."
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+CWD_ARGS=()
+if [ "$OPEN" -eq 1 ]; then
+  # Outside the repo on purpose. Inside it, the agent can read a worked
+  # solution and the harness's own instruments, and the measurement collapses
+  # back to "cost of running a known command".
+  WORKSPACE="${LLM_ENERGY_WORKSPACE_ROOT:-$HOME/llm-energy-workspaces}/$TASK-$STAMP"
+  mkdir -p "$WORKSPACE"
+  cp "$BRIEF" "$WORKSPACE/BRIEF.md"
+  CWD_ARGS=(--cwd "$WORKSPACE")
+  PROMPT="Read BRIEF.md and do the job it describes."
+  echo "workspace: $WORKSPACE (contains only BRIEF.md)"
+else
+  WORKSPACE=""
+  PROMPT="Read $BRIEF and do the job it describes."
+fi
+
 CLAUDE_ARGS=()
 [ -n "$MODEL" ] && CLAUDE_ARGS+=(--model "$MODEL")
 if [ "$INTERACTIVE" -eq 1 ]; then
@@ -122,7 +154,7 @@ fi
 
 step "Measured coordination session${MODEL:+ (model: $MODEL)}"
 uv run llm-energy measure-session "${BACKEND_ARGS[@]+"${BACKEND_ARGS[@]}"}" \
-  -- claude "${CLAUDE_ARGS[@]}"
+  "${CWD_ARGS[@]+"${CWD_ARGS[@]}"}" -- claude "${CLAUDE_ARGS[@]}"
 
 # 5. Pair the artifacts ------------------------------------------------------
 step "Pairing results"
@@ -131,21 +163,49 @@ step "Pairing results"
 SESSION_POWER=$(ls -t results/power-session-*.json 2>/dev/null | head -1)
 [ -n "$SESSION_POWER" ] || die "no session-power result was written"
 
-TASK_RESULT=$(uv run llm-energy find-task-result "$SESSION_POWER") \
-  || die "could not find the task run for this session (see above)"
-
 SESSION_ENERGY="results/session-energy-$(basename "$SESSION_POWER" .json).json"
-uv run llm-energy analyze-session --for-task "$TASK_RESULT" \
-                                  --out-file "$SESSION_ENERGY"
-
-# 6. Report ------------------------------------------------------------------
-step "Report"
 REPORT="results/report-$LABEL-$(basename "$SESSION_POWER" .json).md"
-uv run llm-energy report "$TASK_RESULT" "$SESSION_ENERGY" \
-                         --session-power "$SESSION_POWER" \
-                         --md "$REPORT"
 
-cat <<EOF
+if [ "$OPEN" -eq 1 ]; then
+  # Nothing was launched by the harness, so there is no task result to pair
+  # against; the session-power result carries the sessions it observed.
+  uv run llm-energy analyze-session --for-session-power "$SESSION_POWER" \
+                                    --out-file "$SESSION_ENERGY"
+
+  step "Deliverable"
+  # Not fatal: a run that burned tokens and produced nothing usable is a
+  # result, and the energy figures for it are still valid.
+  if uv run llm-energy verify-deliverable "$WORKSPACE" --task "$TASK"; then
+    DELIVERED="met the specification"
+  else
+    DELIVERED="DID NOT meet the specification"
+  fi
+
+  step "Report"
+  uv run llm-energy report-open "$SESSION_POWER" "$SESSION_ENERGY" \
+                                --workspace "$WORKSPACE" --task "$TASK" \
+                                --md "$REPORT"
+  cat <<EOF
+
+Artifacts for this run:
+  workspace      $WORKSPACE
+  deliverable    $DELIVERED
+  session tokens $SESSION_ENERGY
+  session power  $SESSION_POWER
+  report         $REPORT
+EOF
+else
+  TASK_RESULT=$(uv run llm-energy find-task-result "$SESSION_POWER") \
+    || die "could not find the task run for this session (see above)"
+
+  uv run llm-energy analyze-session --for-task "$TASK_RESULT" \
+                                    --out-file "$SESSION_ENERGY"
+
+  step "Report"
+  uv run llm-energy report "$TASK_RESULT" "$SESSION_ENERGY" \
+                           --session-power "$SESSION_POWER" \
+                           --md "$REPORT"
+  cat <<EOF
 
 Artifacts for this run:
   task run       $TASK_RESULT
@@ -157,3 +217,4 @@ Compare against another model's run with:
   uv run llm-energy compare --trial $LABEL $TASK_RESULT $SESSION_ENERGY \\
                             --trial <other> <task.json> <session.json>
 EOF
+fi

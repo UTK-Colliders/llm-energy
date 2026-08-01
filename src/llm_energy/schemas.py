@@ -154,6 +154,18 @@ class TaskRunResult:
 
 
 @dataclass
+class ObservedContainer:
+    """A container the agent started, seen via the Docker event stream."""
+    container_id: str
+    image: str
+    started_at: str
+    ended_at: str
+    wall_time_s: float
+    gross_joules: float
+    mean_power_w: float
+
+
+@dataclass
 class SessionPowerResult:
     """Package power measured across a whole coordination session.
 
@@ -180,7 +192,22 @@ class SessionPowerResult:
     session_ids: list[str] = field(default_factory=list)
     cwd: str | None = None
     power_trace_file: str | None = None
+    # Containers the agent ran, and the energy inside them. For an open task
+    # this is the closest thing to E_task: the harness did not launch the work,
+    # so it timed it by watching the Docker daemon instead. `container_joules`
+    # is over the *union* of windows, so concurrent containers are not
+    # double-counted and it stays subtractable from the session total.
+    containers: list[ObservedContainer] = field(default_factory=list)
+    container_joules: float | None = None
+    container_wall_s: float | None = None
     notes: list[str] = field(default_factory=list)
+
+    def outside_container_joules(self) -> float | None:
+        """Session energy not spent inside any container — the agent thinking,
+        reading, and writing, as opposed to the computation it launched."""
+        if not self.power_ok or self.container_joules is None:
+            return None
+        return self.gross_joules - self.container_joules
     machine: MachineInfo = field(default_factory=MachineInfo)
     schema_version: int = SCHEMA_VERSION
     tool_version: str = __version__
@@ -287,6 +314,8 @@ def load_task_result(path: Path) -> TaskRunResult:
 def load_session_power(path: Path) -> SessionPowerResult:
     data = json.loads(path.read_text())
     data["machine"] = _from_dict(MachineInfo, data.get("machine", {}))
+    data["containers"] = [_from_dict(ObservedContainer, c)
+                          for c in data.get("containers", [])]
     return _from_dict(SessionPowerResult, data)
 
 

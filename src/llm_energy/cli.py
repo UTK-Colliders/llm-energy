@@ -471,6 +471,89 @@ def find_task_result(session_power: Path, out: Path, show_all: bool):
         click.echo(str(m))
 
 
+@main.command("verify-deliverable")
+@click.argument("workspace", type=click.Path(path_type=Path, exists=True))
+@click.option("--task", "task_name", default="madgraph-ttbar-open",
+              show_default=True, help="open task whose spec.yaml grades this")
+@click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
+              show_default=True)
+@click.option("--file", "explicit", type=click.Path(path_type=Path), default=None,
+              help="grade this file instead of searching the workspace")
+def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
+                       explicit: Path | None):
+    """Check an open task's output against what the brief demanded.
+
+    Reads the LHE payload, not the generator banner: a sample produced by an
+    unexpected route still passes, and a convincing banner over the wrong
+    physics still fails. Exits nonzero if the deliverable is wrong or missing.
+    """
+    from llm_energy.deliverable import find_deliverable, load_open_spec
+
+    spec = load_open_spec(task_dir / task_name)
+    target = explicit or (workspace / spec.deliverable_path)
+    if not target.exists():
+        found = find_deliverable(workspace)
+        if not found:
+            raise click.ClickException(
+                f"no LHE file anywhere under {workspace} — the run produced no "
+                "deliverable")
+        target = found[0]
+        console.print(f"[yellow]note: nothing at {spec.deliverable_path}; "
+                      f"grading {target.relative_to(workspace)} instead[/yellow]")
+
+    report = spec.verify(target)
+    console.print(f"[bold]{target}[/bold]")
+    for c in report.checks:
+        mark = "[green]ok[/green]" if c.ok else "[red]FAIL[/red]"
+        console.print(f"  {mark}  {c.name} — {c.detail}")
+    if report.events_sha256:
+        console.print(f"  [dim]event content sha256: "
+                      f"{report.events_sha256[:16]}[/dim]")
+    if report.ok:
+        console.print("[green]deliverable meets the specification[/green]")
+    else:
+        console.print("[red]deliverable does NOT meet the specification[/red]")
+        raise SystemExit(1)
+
+
+@main.command("report-open")
+@click.argument("session_power", type=click.Path(path_type=Path, exists=True))
+@click.argument("session_result", type=click.Path(path_type=Path, exists=True))
+@click.option("--workspace", type=click.Path(path_type=Path), default=None,
+              help="grade the deliverable in this workspace too")
+@click.option("--task", "task_name", default="madgraph-ttbar-open",
+              show_default=True)
+@click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
+              show_default=True)
+@click.option("--md", type=click.Path(path_type=Path), default=None)
+def report_open(session_power: Path, session_result: Path,
+                workspace: Path | None, task_name: str, task_dir: Path,
+                md: Path | None):
+    """Report an open run: no harness-launched task, so E_task is the energy
+    observed inside the containers the agent started."""
+    from llm_energy.report import render_open_markdown, render_open_terminal
+    from llm_energy.schemas import load_session_power, load_session_result
+
+    sp = _load_or_die(load_session_power, session_power, "session-power")
+    se = _load_or_die(load_session_result, session_result, "session-energy")
+
+    deliverable = None
+    if workspace:
+        from llm_energy.deliverable import find_deliverable, load_open_spec
+        spec = load_open_spec(task_dir / task_name)
+        target = workspace / spec.deliverable_path
+        if not target.exists():
+            found = find_deliverable(workspace)
+            target = found[0] if found else None
+        deliverable = spec.verify(target) if target else None
+
+    render_open_terminal(sp, se, deliverable)
+    if md:
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text(render_open_markdown(sp, se, deliverable))
+        console.print(f"wrote {md}")
+
+
 # --- report / compare / verify-events ----------------------------------------
 
 @main.command("report")

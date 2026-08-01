@@ -1,0 +1,25 @@
+schema_version: 1
+name: madgraph-ttbar-open
+kind: open
+description: >
+  The madgraph-ttbar-lhe physics, but the agent is given only the goal. No
+  card, no commands, no container: it works out how to produce the sample and
+  carries that out itself. Nothing here is shown to the agent — this file is
+  the operator's grading key, and BRIEF.md is what the agent reads.
+
+deliverable:
+  # where the brief tells the agent to leave the result, relative to its
+  # workspace; a file found elsewhere is graded anyway and noted
+  path: unweighted_events.lhe.gz
+  format: lhe
+
+# What the output must contain, checked against the LHE payload rather than
+# the generator's banner.
+requirements:
+  process: "p p > t t~"
+  order: LO
+  nevents: 10000
+  beam_energy_gev: 6800
+  beam_pdg: [2212, 2212]
+  final_state_pdg: [6, -6]
+  seed: 42

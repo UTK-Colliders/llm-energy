@@ -18,8 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from llm_energy import machine_info
-from llm_energy.schemas import (BaselineResult, PowerTrace, SessionPowerResult,
-                                now_iso)
+from llm_energy.docker_events import DockerEventRecorder, merge_windows
+from llm_energy.schemas import (BaselineResult, ObservedContainer, PowerTrace,
+                                SessionPowerResult, now_iso)
 from llm_energy.session.locate import find_sessions_started_in_window
 
 
@@ -51,6 +52,8 @@ def measure_session(command: list[str],
     raw_path = run_dir / "power-trace.txt"
 
     interval_s = interval_ms / 1000.0
+    events = DockerEventRecorder(run_dir / "docker-events.jsonl")
+    events_ok = events.start()
     backend_start_mono = time.monotonic()
     backend.start(interval_ms, raw_path)
     try:
@@ -69,8 +72,10 @@ def measure_session(command: list[str],
             backend.stop()
         except Exception:
             pass
+        events.stop()
         raise
 
+    container_windows = events.stop()
     notes: list[str] = []
     power_ok = True
     try:
@@ -95,6 +100,39 @@ def measure_session(command: list[str],
     if baseline is not None and power_ok:
         baseline_mean_w = baseline.mean_w
         net_j = gross_j - baseline.mean_w * wall_time_s
+
+    # Attribute energy to the containers the agent ran. Wall-clock event times
+    # map onto the trace through the session's own start, which was captured
+    # in both clocks.
+    def to_trace_rel(when) -> float:
+        return (when - t_start_wall).total_seconds() + (t0 - backend_start_mono)
+
+    observed: list[ObservedContainer] = []
+    container_j = container_wall = None
+    if power_ok and events_ok:
+        for w in container_windows:
+            if w.ended_at is None:
+                notes.append(f"container {w.container_id} ({w.image}) was still "
+                             "running at session end; its energy is not attributed")
+                continue
+            e = trace.integrate_joules(t_start=to_trace_rel(w.started_at),
+                                       t_end=to_trace_rel(w.ended_at))
+            observed.append(ObservedContainer(
+                container_id=w.container_id, image=w.image,
+                started_at=w.started_at.isoformat(),
+                ended_at=w.ended_at.isoformat(), wall_time_s=w.wall_time_s,
+                gross_joules=e,
+                mean_power_w=e / w.wall_time_s if w.wall_time_s > 0 else 0.0))
+        # union, so overlapping containers are counted once and the figure
+        # stays subtractable from the session total
+        merged = merge_windows(container_windows)
+        container_j = sum(trace.integrate_joules(t_start=to_trace_rel(a),
+                                                 t_end=to_trace_rel(b))
+                          for a, b in merged)
+        container_wall = sum((b - a).total_seconds() for a, b in merged)
+    elif not events_ok:
+        notes.append("docker event stream unavailable, so energy could not be "
+                     "split into in-container and out-of-container parts")
 
     sessions = find_sessions_started_in_window(t_start_wall, t_end_wall, cwd=cwd)
     if not sessions and cwd is not None:
@@ -131,6 +169,9 @@ def measure_session(command: list[str],
         session_ids=[s.session_id for s in sessions],
         cwd=str(cwd) if cwd else None,
         power_trace_file=str(raw_path) if raw_path.exists() else None,
+        containers=observed,
+        container_joules=container_j,
+        container_wall_s=container_wall,
         notes=notes,
         machine=machine_info.collect(),
     )

@@ -254,6 +254,79 @@ This matters more than it sounds. `--latest` sorts every transcript on the
 machine by mtime: run it from a second Claude session and you measure that
 session instead, silently. Prefer `--for-task` whenever a task result exists.
 
+## Open tasks: measuring the cost of solving, not of executing
+
+There are two kinds of task here, and they measure different things.
+
+| | `madgraph-ttbar-lhe` (pinned) | `madgraph-ttbar-open` |
+|---|---|---|
+| The agent is given | the run card, the command, the steps | the required physics, nothing else |
+| The agent works out | nothing | how to get MadGraph, what card to write, how to run and check it |
+| Runs in | this repo | a scratch workspace outside it, containing only the brief |
+| Measures | the floor: executing a known solution | solving the problem |
+| Correctness is | guaranteed by construction | **an outcome**, graded per run |
+
+The pinned task exists as a control. Its brief hands over
+`cards/ttbar_lhe.mg5`, which is the complete answer — including the
+non-obvious double `done` that MG5 3.5.x's prompt flow needs — so a session on
+it costs about what reading a runbook costs, and barely discriminates between
+models. Subtract it from an open run and what's left is the cost of figuring
+the problem out.
+
+```sh
+scripts/measure-run.sh --task madgraph-ttbar-open
+```
+
+**The workspace is outside the repo on purpose.** Inside it, an agent can find
+that worked card, and a good one *would* — at which point the open task
+silently degrades back into the pinned one. The script copies the brief into
+`~/llm-energy-workspaces/<task>-<ts>/` (override with
+`LLM_ENERGY_WORKSPACE_ROOT`) and runs the session there, with nothing else in
+scope. No image is pre-built either: sourcing a generator is part of the job.
+
+### How it is still measured
+
+The harness launches nothing, so it watches instead. `measure-session` records
+the Docker daemon's event stream for the session's duration and pairs
+container start/stop events into windows, whoever started them:
+
+| Quantity | How |
+|---|---|
+| Session energy | measured, whole window |
+| **E_compute** | measured, inside the union of observed container windows |
+| **E_coord,local** | measured, the remainder — the agent thinking and reading |
+| E_LLM | estimated from tokens, as before |
+
+Overlapping containers are merged so their energy is counted once, and one
+still running at session end is reported rather than attributed. If the agent
+runs a generator directly on the host instead of in a container, that work
+lands in the coordination bucket — the report says so.
+
+### Grading the result
+
+With the method unpinned, the output can be wrong, so a run's energy only
+means something next to a verdict:
+
+```sh
+uv run llm-energy verify-deliverable ~/llm-energy-workspaces/madgraph-ttbar-open-<ts>
+```
+
+```
+  ok    beam energy — 6800 / 6800 GeV, wanted 6800 each
+  ok    beam particles — PDG 2212 / 2212, wanted 2212 / 2212
+  FAIL  event count — 500 events, wanted 10000
+  FAIL  final state — found an event with final state (-5, 5), wanted (-6, 6)
+deliverable does NOT meet the specification
+```
+
+Checks read the LHE payload — the `<init>` block and the event records — not
+the generator's banner. A sample produced by an unexpected route still passes;
+a convincing banner over the wrong physics still fails. The grading key lives
+in `tasks/madgraph-ttbar-open/spec.yaml` and is never shown to the agent.
+
+A failed run is recorded, not discarded: a model that burns 300k tokens and
+produces nothing is a result.
+
 ## Separating compilation from execution
 
 `madgraph-ttbar-lhe` measures one number for two different kinds of work: MG5's

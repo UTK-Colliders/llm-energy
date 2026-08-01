@@ -509,3 +509,125 @@ def render_chart(trials: list[Trial], path: Path) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+# --- open tasks --------------------------------------------------------------
+#
+# For an open task the harness launches nothing, so there is no TaskRunResult.
+# E_task is the energy observed inside the containers the agent started, and
+# the coordination cost is what is left of the session.
+
+OPEN_CAVEATS = [
+    "E_compute is the energy inside containers the agent started, observed via "
+    "the Docker event stream — the harness did not launch them, so the "
+    "boundary is the container's lifetime, not a task definition.",
+    "Work the agent ran outside a container counts as coordination, not "
+    "compute. A generator invoked directly on the host would land in the wrong "
+    "bucket.",
+    "E_LLM is estimated from tokens and literature coefficients including PUE; "
+    "the two measured terms are local package energy. Only the measured terms "
+    "are comparable with each other.",
+]
+
+
+def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
+              deliverable=None) -> list[tuple[str, str]]:
+    b = se.total_band
+    rows = [("Session wall time", f"{sp.wall_time_s:.0f} s "
+                                  f"(mean {sp.mean_power_w:.2f} W)")]
+    if not sp.power_ok:
+        rows.append(("Session energy", "unusable — power sampling failed"))
+    else:
+        rows.append(("Session energy (measured, gross)",
+                     f"{sp.gross_joules:.1f} J ({_wh(sp.gross_joules):.3f} Wh)"))
+        if sp.net_joules is not None:
+            rows.append(("Session energy (net of idle)",
+                         f"{sp.net_joules:.1f} J ({_wh(sp.net_joules):.3f} Wh)"))
+        outside = sp.outside_container_joules()
+        if sp.container_joules is not None:
+            rows.append(("E_compute (in containers, measured)",
+                         f"{sp.container_joules:.1f} J "
+                         f"({_wh(sp.container_joules):.3f} Wh) over "
+                         f"{sp.container_wall_s:.0f} s, "
+                         f"{len(sp.containers)} container(s)"))
+        if outside is not None:
+            share = (100.0 * outside / sp.gross_joules
+                     if sp.gross_joules > 0 else float("nan"))
+            rows.append(("E_coord,local (outside containers, measured)",
+                         f"{outside:.1f} J ({_wh(outside):.3f} Wh), "
+                         f"{share:.1f}% of the session"))
+    rows += [
+        ("LLM model(s)", ", ".join(m.model for m in se.usage.per_model)),
+        ("LLM tokens (in/out/cache-create/cache-read)",
+         " / ".join(str(x) for x in [
+             sum(m.input_tokens for m in se.usage.per_model),
+             sum(m.output_tokens for m in se.usage.per_model),
+             sum(m.cache_creation_tokens for m in se.usage.per_model),
+             sum(m.cache_read_tokens for m in se.usage.per_model)])),
+        ("LLM turns", f"{se.usage.assistant_turns} assistant, "
+                      f"{se.usage.sidechain_turns} sidechain"),
+        ("E_LLM (low/central/high, estimated)",
+         f"{b.low_j:.0f} / {b.central_j:.0f} / {b.high_j:.0f} J"),
+    ]
+    if deliverable is not None:
+        verdict = "MET" if deliverable.ok else "NOT MET"
+        rows.append(("Deliverable", f"{verdict} — {deliverable.n_events} events"))
+        for c in deliverable.failures:
+            rows.append((f"  failed: {c.name}", c.detail))
+    elif deliverable is None:
+        rows.append(("Deliverable", "not checked"))
+    return rows
+
+
+def container_rows(sp: SessionPowerResult) -> list[list[str]]:
+    return [[c.container_id, c.image or "?", f"{c.wall_time_s:.0f} s",
+             f"{c.gross_joules:.1f} J", f"{c.mean_power_w:.2f} W"]
+            for c in sp.containers]
+
+
+CONTAINER_HEADERS = ["Container", "Image", "Wall", "Energy", "Mean power"]
+
+
+def render_open_terminal(sp: SessionPowerResult, se: SessionEnergyResult,
+                         deliverable=None) -> None:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    table = Table(title="llm-energy: open task")
+    table.add_column("Quantity")
+    table.add_column("Value")
+    for k, v in open_rows(sp, se, deliverable):
+        table.add_row(k, v)
+    console.print(table)
+
+    if sp.containers:
+        ct = Table(title="Containers the agent ran")
+        for col in CONTAINER_HEADERS:
+            ct.add_column(col)
+        for r in container_rows(sp):
+            ct.add_row(*r)
+        console.print(ct)
+
+    for n in sp.notes:
+        console.print(f"[yellow]note: {n}[/yellow]")
+    console.print("[dim]Caveats:[/dim]")
+    for c in OPEN_CAVEATS:
+        console.print(f"[dim] - {c}[/dim]")
+
+
+def render_open_markdown(sp: SessionPowerResult, se: SessionEnergyResult,
+                         deliverable=None) -> str:
+    lines = ["# llm-energy report: open task", ""]
+    lines.append(f"Machine: {sp.machine.chip or sp.machine.hostname} "
+                 f"({sp.machine.platform}) — {sp.created_at}")
+    lines += ["", "| Quantity | Value |", "|---|---|"]
+    lines += [f"| {k} | {v} |" for k, v in open_rows(sp, se, deliverable)]
+    if sp.containers:
+        lines += ["", "## Containers the agent ran", "",
+                  "| " + " | ".join(CONTAINER_HEADERS) + " |",
+                  "|" + "---|" * len(CONTAINER_HEADERS)]
+        lines += ["| " + " | ".join(r) + " |" for r in container_rows(sp)]
+    lines += ["", "## Caveats", ""] + [f"- {c}" for c in OPEN_CAVEATS]
+    lines += [f"- {n}" for n in sp.notes]
+    return "\n".join(lines) + "\n"

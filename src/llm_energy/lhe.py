@@ -63,6 +63,63 @@ def event_summary(path: Path) -> tuple[int, str]:
     return n, h.hexdigest()
 
 
+def read_init(path: Path) -> dict | None:
+    """Beam configuration from the LHE `<init>` block.
+
+    The first line after `<init>` is, per the Les Houches accord:
+        IDBMUP(1) IDBMUP(2) EBMUP(1) EBMUP(2) PDFGUP(1..2) PDFSUP(1..2)
+        IDWTUP NPRUP
+    Read from the machine-readable block rather than the MG5 banner, which is
+    free text and varies by version.
+    """
+    with _open_text(path) as fh:
+        for raw in fh:
+            if raw.strip().startswith("<init"):
+                break
+        else:
+            return None
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith(("#", "<")):
+                continue
+            f = line.split()
+            if len(f) < 4:
+                return None
+            try:
+                return {"beam_pdg": (int(float(f[0])), int(float(f[1]))),
+                        "beam_energy_gev": (float(f[2]), float(f[3]))}
+            except ValueError:
+                return None
+    return None
+
+
+def final_state_pdgs(event_lines: list[str]) -> tuple[int, ...] | None:
+    """Sorted PDG ids of the outgoing particles in one normalized event block.
+
+    Event record: a header line `NUP IDPRUP XWGTUP SCALUP AQEDUP AQCDUP`, then
+    NUP particle lines whose second field ISTUP is +1 for a final-state
+    particle. Reading the events themselves checks the physics that was
+    actually generated, independent of what the banner claims.
+    """
+    if not event_lines:
+        return None
+    try:
+        nup = int(float(event_lines[0].split()[0]))
+    except (ValueError, IndexError):
+        return None
+    out: list[int] = []
+    for line in event_lines[1:1 + nup]:
+        f = line.split()
+        if len(f) < 2:
+            return None
+        try:
+            if int(float(f[1])) == 1:
+                out.append(int(float(f[0])))
+        except ValueError:
+            return None
+    return tuple(sorted(out))
+
+
 @dataclass
 class LheComparison:
     files: list[str]
