@@ -1,0 +1,17 @@
+# results and task outputs
+results/*
+!results/.gitkeep
+*.lhe
+*.lhe.gz
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.pytest_cache/
+
+# misc
+.DS_Store
