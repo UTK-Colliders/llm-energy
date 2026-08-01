@@ -49,6 +49,11 @@ class DockerEventRecorder:
         self.out_path = out_path
         self._proc: subprocess.Popen | None = None
         self._fh = None
+        # False once the stream is known to have failed. An empty event log is
+        # ambiguous — no containers ran, or the stream never worked — and the
+        # two must not be confused: the second would attribute every joule of
+        # compute to coordination while looking like a clean measurement.
+        self.healthy = False
 
     def start(self) -> bool:
         """True if the recorder is running; False if docker is unavailable."""
@@ -62,6 +67,7 @@ class DockerEventRecorder:
         except OSError:
             self._cleanup()
             return False
+        self.healthy = True
         return True
 
     def _cleanup(self):
@@ -74,12 +80,19 @@ class DockerEventRecorder:
 
     def stop(self) -> list[ContainerWindow]:
         if self._proc is not None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-                self._proc.wait(timeout=5)
+            # A stream that exited on its own never watched the session —
+            # `docker events` returns immediately when the daemon is
+            # unreachable, and the empty log it leaves behind is
+            # indistinguishable from "the agent ran no containers".
+            if self._proc.poll() is not None:
+                self.healthy = False
+            else:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5)
             self._proc = None
         self._cleanup()
         if not self.out_path.exists():

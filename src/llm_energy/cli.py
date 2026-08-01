@@ -490,6 +490,10 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
     from llm_energy.deliverable import find_deliverable, load_open_spec
 
     spec = load_open_spec(task_dir / task_name)
+    if explicit is not None and not explicit.exists():
+        # An explicit --file is a request to grade that file; falling back to
+        # whatever else is lying around would answer a different question.
+        raise click.ClickException(f"{explicit} does not exist")
     target = explicit or (workspace / spec.deliverable_path)
     if not target.exists():
         found = find_deliverable(workspace)
@@ -514,6 +518,58 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
     else:
         console.print("[red]deliverable does NOT meet the specification[/red]")
         raise SystemExit(1)
+
+
+@main.command("breakdown")
+@click.option("--label", default="run", show_default=True)
+@click.option("--task", "task_result", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="task result (its phases become separate portions)")
+@click.option("--session-power", "session_power", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="measure-session result, for the local coordination term")
+@click.option("--session", "session_result", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="analyze-session result, for the estimated inference term")
+@click.option("--md", type=click.Path(path_type=Path), default=None)
+@click.option("--chart", type=click.Path(path_type=Path), default=None,
+              help="write a single-panel PDF figure (needs the [plots] extra)")
+def breakdown_cmd(label: str, task_result: Path | None,
+                  session_power: Path | None, session_result: Path | None,
+                  md: Path | None, chart: Path | None):
+    """Relative energy of each portion of a run.
+
+    Takes whichever artifacts exist and assembles one budget: task phases (or
+    observed containers), local coordination, and estimated inference. Shares
+    are within the measured group; the estimated term is reported as a
+    multiple of it, never folded in.
+    """
+    from llm_energy.analysis import (build_budget, render_budget_chart,
+                                     render_budget_markdown,
+                                     render_budget_terminal)
+    from llm_energy.schemas import (load_session_power, load_session_result,
+                                    load_task_result)
+
+    if not any((task_result, session_power, session_result)):
+        raise click.ClickException(
+            "give at least one of --task, --session-power, --session")
+
+    budget = build_budget(
+        label,
+        task=_load_or_die(load_task_result, task_result, "task-run")
+        if task_result else None,
+        session_power=_load_or_die(load_session_power, session_power,
+                                   "session-power") if session_power else None,
+        session=_load_or_die(load_session_result, session_result,
+                             "session-energy") if session_result else None)
+
+    render_budget_terminal(budget)
+    if md:
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text(render_budget_markdown(budget))
+        console.print(f"wrote {md}")
+    if chart:
+        console.print(f"wrote {render_budget_chart(budget, chart)}")
 
 
 @main.command("report-open")

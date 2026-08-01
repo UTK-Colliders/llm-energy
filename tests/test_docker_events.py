@@ -104,3 +104,30 @@ def test_seconds_only_timestamps_are_accepted():
                            "from": "i", "Actor": {"ID": "a" * 64}})
     [w] = parse_events([plain("start", 0), plain("die", 12)])
     assert w.wall_time_s == 12.0
+
+
+def test_recorder_marks_itself_unhealthy_when_the_stream_dies(tmp_path, monkeypatch):
+    """A `docker events` that exits on its own never watched anything."""
+    import subprocess
+    from llm_energy.docker_events import DockerEventRecorder
+
+    class Dead:
+        returncode = 1
+        def poll(self):
+            return 1
+    r = DockerEventRecorder(tmp_path / "ev.jsonl")
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Dead())
+    assert r.start() is True and r.healthy is True
+    r.stop()
+    assert r.healthy is False, "an exited stream must not look like a clean run"
+
+
+def test_recorder_unhealthy_when_docker_is_missing(tmp_path, monkeypatch):
+    import subprocess
+    from llm_energy.docker_events import DockerEventRecorder
+
+    def no_docker(*a, **k):
+        raise FileNotFoundError("docker")
+    monkeypatch.setattr(subprocess, "Popen", no_docker)
+    r = DockerEventRecorder(tmp_path / "ev.jsonl")
+    assert r.start() is False and r.healthy is False

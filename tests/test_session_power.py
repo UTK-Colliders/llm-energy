@@ -165,6 +165,7 @@ class FakeEvents:
 
     def __init__(self, windows, ok=True):
         self.windows, self.ok = windows, ok
+        self.healthy = ok
 
     def __call__(self, out_path):
         return self
@@ -256,4 +257,38 @@ def test_no_docker_means_no_split_but_a_valid_total(with_events, monkeypatch,
     assert res.gross_joules == pytest.approx(40.0)
     assert res.container_joules is None
     assert res.outside_container_joules() is None
-    assert any("docker event stream unavailable" in n for n in res.notes)
+    assert any("docker not available" in n for n in res.notes)
+
+
+def test_broken_event_stream_is_not_reported_as_zero_containers(
+        with_events, monkeypatch, tmp_path):
+    """`docker events` exits immediately when the daemon is unreachable. The
+    empty log it leaves must not read as 'the agent ran no containers', which
+    would bill every joule of compute to coordination."""
+    class Unhealthy(FakeEvents):
+        def __init__(self):
+            super().__init__([], ok=True)
+            self.healthy = False
+    monkeypatch.setattr(sp, "DockerEventRecorder", Unhealthy())
+
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    assert res.gross_joules == pytest.approx(40.0)     # total still valid
+    assert res.container_joules is None                 # but no split claimed
+    assert res.outside_container_joules() is None
+    assert any("did not run" in n for n in res.notes)
+
+
+def test_healthy_stream_with_no_containers_reports_a_real_zero(
+        with_events, monkeypatch, tmp_path):
+    install(monkeypatch, [])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    assert res.container_joules == pytest.approx(0.0)
+    assert res.outside_container_joules() == pytest.approx(40.0)
+
+
+def test_container_windows_outside_the_session_flag_clock_disagreement(
+        with_events, monkeypatch, tmp_path):
+    """Event times come from the daemon, which on macOS runs in its own VM."""
+    install(monkeypatch, [window(-9000, -8000)])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+    assert any("daemon clock disagrees" in n for n in res.notes)

@@ -109,7 +109,19 @@ def measure_session(command: list[str],
 
     observed: list[ObservedContainer] = []
     container_j = container_wall = None
-    if power_ok and events_ok:
+    if power_ok and events_ok and events.healthy:
+        outside_window = [w for w in container_windows
+                          if w.ended_at is not None
+                          and (w.ended_at < t_start_wall or w.started_at > t_end_wall)]
+        if outside_window:
+            # Event timestamps come from the daemon, which on macOS lives in a
+            # VM with its own clock. Windows landing outside the session cannot
+            # be mapped onto the trace, and quietly contributing zero would
+            # read as "that container used no energy".
+            notes.append(
+                f"{len(outside_window)} container window(s) fall outside the "
+                "measured session, so the daemon clock disagrees with this "
+                "machine's — the in/out-of-container split is unreliable")
         for w in container_windows:
             if w.ended_at is None:
                 notes.append(f"container {w.container_id} ({w.image}) was still "
@@ -130,9 +142,12 @@ def measure_session(command: list[str],
                                                  t_end=to_trace_rel(b))
                           for a, b in merged)
         container_wall = sum((b - a).total_seconds() for a, b in merged)
-    elif not events_ok:
-        notes.append("docker event stream unavailable, so energy could not be "
-                     "split into in-container and out-of-container parts")
+    elif power_ok:
+        notes.append(
+            "the docker event stream did not run"
+            + ("" if events_ok else " (docker not available)")
+            + ", so energy could not be split into in-container and "
+            "out-of-container parts — the session total is unaffected")
 
     sessions = find_sessions_started_in_window(t_start_wall, t_end_wall, cwd=cwd)
     if not sessions and cwd is not None:

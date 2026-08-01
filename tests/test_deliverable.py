@@ -109,3 +109,16 @@ def test_deliverable_search_finds_gzipped_output(tmp_path):
                   n=2, gz=True) if (tmp_path / "deep" / "run_01").mkdir(
                       parents=True) is None else None
     assert find_deliverable(tmp_path) == [p]
+
+
+def test_explicit_file_that_is_missing_is_an_error_not_a_fallback(tmp_path):
+    """Grading some other file would answer a different question."""
+    from click.testing import CliRunner
+    from llm_energy.cli import main
+
+    write_lhe(tmp_path / "decoy.lhe", n=3)
+    res = CliRunner().invoke(main, ["verify-deliverable", str(tmp_path),
+                                    "--file", str(tmp_path / "typo.lhe")])
+    assert res.exit_code != 0
+    assert "does not exist" in res.output
+    assert "decoy" not in res.output

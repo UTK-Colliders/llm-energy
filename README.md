@@ -380,6 +380,40 @@ phases:
 Phases share the run directory and run in order; a failed phase skips the rest.
 `command:` remains valid and is reported as a single phase named `run`.
 
+## Where the energy went
+
+`breakdown` assembles whichever artifacts a run produced into one budget, so
+the portions can be read against each other:
+
+```sh
+uv run llm-energy breakdown --label madgraph-ttbar-split \
+  --task results/task-....json \
+  --session-power results/power-session-....json \
+  --session results/session-....json \
+  --md results/budget.md --chart results/budget.pdf
+```
+
+| Portion | Basis | Energy | Share |
+|---|---|---|---|
+| codegen-compile | measured | 3100 J (0.861 Wh) | 28.4% |
+| event-generation | measured | 900 J (0.250 Wh) | 8.3% |
+| coordination (local) | measured | 6900 J (1.917 Wh) | 63.3% |
+| **total measured** | | **10900 J (3.028 Wh)** | **100%** |
+| LLM inference | estimated | 45000 / 180000 / 720000 J | 4.1× / 16.5× / 66.1× of measured |
+
+It adapts to what it is given: a split task contributes one portion per phase,
+a single-phase task one, an open run contributes compute-in-containers and
+coordination, and the token result contributes the inference band. Any subset
+of the three artifacts works.
+
+**Shares are within the measured group only.** Local SoC package energy and
+estimated remote datacenter energy are different quantities and are never
+summed — the estimated term is reported as a *multiple* of the measured total,
+never as a slice of it. `--chart` writes a single-panel PDF on a log axis
+(the portions span orders of magnitude), drawn as a dot plot rather than bars
+because a log axis has no zero for a bar to grow from, with the estimated term
+marked differently so it cannot be misread as a measurement.
+
 ## Comparing LLM models
 
 One run per model — same brief, same pinned physics, different coordinator:
