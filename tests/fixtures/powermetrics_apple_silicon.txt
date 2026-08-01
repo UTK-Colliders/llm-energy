@@ -1,0 +1,46 @@
+Machine model: Mac14,12
+OS version: 24F74
+Boot arguments:
+Boot time: Fri Aug  1 09:12:44 2026
+
+
+
+*** Sampled system activity (Fri Aug  1 10:00:01 2026 -0400) (1003.42ms elapsed) ***
+
+*** Running tasks ***
+
+Name           ID     CPU ms/s  samp ms/s  User%  Deadlines (<2 ms, 2-5 ms)  Wakeups (Intr, Pkg idle)
+mg5_aMC        4211   3210.11   3210.11    92.11  0.00    0.00               12.00   3.00
+
+**** Processor usage ****
+
+E-Cluster Power: 210 mW
+E-Cluster HW active frequency: 1420 MHz
+P0-Cluster Power: 3010 mW
+P0-Cluster HW active frequency: 3204 MHz
+CPU Power: 3220 mW
+GPU Power: 44 mW
+ANE Power: 0 mW
+Combined Power (CPU + GPU + ANE): 3264 mW
+
+*** Sampled system activity (Fri Aug  1 10:00:02 2026 -0400) (1000.10ms elapsed) ***
+
+**** Processor usage ****
+
+E-Cluster Power: 190 mW
+P0-Cluster Power: 4110 mW
+CPU Power: 4300 mW
+GPU Power: 50 mW
+ANE Power: 0 mW
+Combined Power (CPU + GPU + ANE): 4350 mW
+
+*** Sampled system activity (Fri Aug  1 10:00:03 2026 -0400) (999.55ms elapsed) ***
+
+**** Processor usage ****
+
+E-Cluster Power: 205 mW
+P0-Cluster Power: 3895 mW
+CPU Power: 4100 mW
+GPU Power: 61 mW
+ANE Power: 0 mW
+Combined Power (CPU + GPU + ANE): 4161 mW

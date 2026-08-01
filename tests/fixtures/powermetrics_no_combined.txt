@@ -1,0 +1,15 @@
+*** Sampled system activity (Fri Aug  1 10:00:01 2026 -0400) (2000.00ms elapsed) ***
+
+**** Processor usage ****
+
+CPU Power: 1500 mW
+GPU Power: 250 mW
+ANE Power: 50 mW
+
+*** Sampled system activity (Fri Aug  1 10:00:03 2026 -0400) (2000.00ms elapsed) ***
+
+**** Processor usage ****
+
+CPU Power: 1000 mW
+GPU Power: 200 mW
+ANE Power: 0 mW
