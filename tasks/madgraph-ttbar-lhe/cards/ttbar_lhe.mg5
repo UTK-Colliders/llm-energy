@@ -1,0 +1,20 @@
+# 10,000 pp -> t t~ events at 13.6 TeV, LO, unweighted LHE output.
+#
+# Prompt flow in MG5 3.5.x script mode: the first `done` dismisses the
+# shower/detector/madspin switch menu after `launch` (all off at LO); the
+# `set` lines then edit run_card at the edit-cards prompt; the final `done`
+# starts madevent. If a future MG5 version reorders these prompts, only this
+# file needs to change.
+#
+# iseed is pinned so runs coordinated by different LLMs (same image) must
+# produce identical events — checked by `llm-energy verify-events`.
+set automatic_html_opening False
+generate p p > t t~
+output /work/proc_pp_ttbar
+launch /work/proc_pp_ttbar
+done
+set nevents 10000
+set ebeam1 6800.0
+set ebeam2 6800.0
+set iseed 42
+done

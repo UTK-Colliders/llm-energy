@@ -1,0 +1,52 @@
+schema_version: 1
+name: madgraph-ttbar-lhe
+description: >
+  MadGraph5_aMC@NLO leading-order generation of 10,000 pp -> t t~ events at
+  sqrt(s) = 13.6 TeV (6800 GeV per beam), unweighted LHE output.
+
+images:
+  # Primary: built natively for the host architecture (arm64 on Apple
+  # Silicon) so no emulation distorts the energy measurement.
+  native:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    tag: llm-energy/mg5amc:3.5.16
+  # Alternative: community image, linux/amd64 only. On Apple Silicon this
+  # runs under Rosetta and is flagged `emulated` in results. Note it ships
+  # MG5 3.5.1, not 3.5.16 — event-level identity with the native variant is
+  # NOT expected across MG5 versions even at fixed seed.
+  scailfin:
+    pull: scailfin/madgraph5-amc-nlo:mg5_amc3.5.1
+    platform: linux/amd64
+
+default_image: native
+
+command: ["mg5_aMC", "/cards/ttbar_lhe.mg5"]
+
+mounts:
+  - source: cards
+    target: /cards
+    mode: ro
+  - source: "{run_dir}"
+    target: /work
+    mode: rw
+
+workdir: /work
+env: {}
+timeout_s: 7200
+
+expect:
+  outputs:
+    - glob: "proc_pp_ttbar/Events/run_01/unweighted_events.lhe*"
+      record_as: lhe_file
+
+metadata:
+  process: "p p > t t~"
+  order: LO
+  ebeam1_gev: 6800
+  ebeam2_gev: 6800
+  nevents: 10000
+  iseed: 42
+  mg5_version_native: "3.5.16"
+  mg5_version_scailfin: "3.5.1"
