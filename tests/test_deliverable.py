@@ -1,6 +1,11 @@
 """Grading an open-ended run's output against the task specification."""
 
 import gzip
+import json
+import math
+from pathlib import Path
+
+import pytest
 
 from llm_energy.deliverable import find_deliverable, verify_lhe
 
@@ -122,3 +127,154 @@ def test_explicit_file_that_is_missing_is_an_error_not_a_fallback(tmp_path):
     assert res.exit_code != 0
     assert "does not exist" in res.output
     assert "decoy" not in res.output
+
+
+# --- reconstructed top mass peak ---------------------------------------------
+
+from llm_energy.deliverable import (grade_workspace, load_open_spec,  # noqa: E402
+                                    verify_mass_peak)
+
+
+def gaussian_hist(path, peak=172.5, sigma=18.0, n=5000, lo=100.0, hi=250.0,
+                  nbins=30, background=0.0):
+    """A plausible reconstructed-mass histogram: a peak over flat combinatorics."""
+    width = (hi - lo) / nbins
+    edges = [lo + i * width for i in range(nbins + 1)]
+    counts = []
+    for i in range(nbins):
+        c = (edges[i] + edges[i + 1]) / 2
+        counts.append(n * math.exp(-0.5 * ((c - peak) / sigma) ** 2) + background)
+    path.write_text(json.dumps({"bin_edges_gev": edges,
+                                "counts": [round(c) for c in counts]}))
+    return path
+
+
+def test_a_top_peak_in_the_right_place_passes(tmp_path):
+    r = verify_mass_peak(gaussian_hist(tmp_path / "h.json"),
+                         expect_gev=172.5, tolerance_gev=15.0)
+    assert r.ok, [c.detail for c in r.failures]
+    assert r.peak_gev == pytest.approx(172.5, abs=3.0)
+    assert r.fwhm_gev and r.fwhm_gev > 0
+
+
+def test_a_peak_in_the_wrong_place_fails(tmp_path):
+    """A W peak instead of a top peak: right shape, wrong physics."""
+    r = verify_mass_peak(gaussian_hist(tmp_path / "h.json", peak=80.4, lo=40.0,
+                                       hi=140.0),
+                         expect_gev=172.5, tolerance_gev=15.0)
+    assert not r.ok
+    fail = [c for c in r.failures if c.name == "peak position"]
+    assert fail and "wanted 172.5" in fail[0].detail
+
+
+def test_a_monotonic_falling_spectrum_is_not_a_peak(tmp_path):
+    """A steeply falling background has a tall first bin and no peak at all."""
+    edges = [100.0 + 5 * i for i in range(31)]
+    counts = [int(5000 * math.exp(-i / 4)) for i in range(30)]
+    (tmp_path / "h.json").write_text(
+        json.dumps({"bin_edges_gev": edges, "counts": counts}))
+    r = verify_mass_peak(tmp_path / "h.json", expect_gev=172.5,
+                         tolerance_gev=1000.0)     # position can't be the failure
+    assert not r.ok
+    assert any(c.name == "peak is interior" for c in r.failures)
+
+
+def test_a_flat_histogram_has_no_prominence(tmp_path):
+    edges = [100.0 + 5 * i for i in range(31)]
+    counts = [100] * 15 + [101] + [100] * 14      # a "peak" one count high
+    (tmp_path / "h.json").write_text(
+        json.dumps({"bin_edges_gev": edges, "counts": counts}))
+    r = verify_mass_peak(tmp_path / "h.json", expect_gev=177.5,
+                         tolerance_gev=15.0)
+    assert not r.ok
+    assert any(c.name == "peak prominence" for c in r.failures)
+
+
+def test_too_few_entries_fails(tmp_path):
+    r = verify_mass_peak(gaussian_hist(tmp_path / "h.json", n=10),
+                         expect_gev=172.5, tolerance_gev=15.0, min_entries=200)
+    assert not r.ok
+    assert any(c.name == "entries" for c in r.failures)
+
+
+def test_missing_histogram_is_not_ok(tmp_path):
+    r = verify_mass_peak(tmp_path / "nope.json", 172.5, 15.0)
+    assert not r.exists and not r.ok
+
+
+@pytest.mark.parametrize("body,why", [
+    ('{"bin_edges_gev": [1,2,3], "counts": [1,2,3]}', "one more edge"),
+    ('{"counts": [1,2]}', "arrays"),
+    ('[1,2,3]', "JSON object"),
+    ('not json at all', "Expecting"),
+    ('{"bin_edges_gev": [3,2,1], "counts": [1,2]}', "increasing"),
+    ('{"bin_edges_gev": ["a","b"], "counts": ["c"]}', "non-numeric"),
+])
+def test_malformed_histograms_are_rejected_with_a_reason(tmp_path, body, why):
+    (tmp_path / "h.json").write_text(body)
+    r = verify_mass_peak(tmp_path / "h.json", 172.5, 15.0)
+    assert not r.ok
+    assert any(why in c.detail for c in r.failures), [c.detail for c in r.failures]
+
+
+# --- grading a whole workspace ------------------------------------------------
+
+def open_spec():
+    return load_open_spec(Path(__file__).parent.parent / "tasks"
+                          / "madgraph-ttbar-open")
+
+
+def complete_workspace(tmp_path, n_events=10000, peak=172.5):
+    write_lhe(tmp_path / "unweighted_events.lhe.gz", n=n_events, gz=True)
+    gaussian_hist(tmp_path / "top_mass_hist.json", peak=peak)
+    (tmp_path / "top_mass.pdf").write_bytes(b"%PDF-1.4 fake")
+    return tmp_path
+
+
+def test_a_complete_run_passes_every_deliverable(tmp_path):
+    g = grade_workspace(open_spec(), complete_workspace(tmp_path, n_events=10000))
+    assert g.ok, [c.detail for c in (g.events.failures + g.peak.failures)]
+
+
+def test_good_events_but_a_wrong_peak_fails_overall(tmp_path):
+    g = grade_workspace(open_spec(),
+                        complete_workspace(tmp_path, n_events=10000, peak=90.0))
+    assert g.events.ok
+    assert not g.peak.ok
+    assert not g.ok, "a correct sample with a bad reconstruction is not a pass"
+
+
+def test_a_missing_plot_fails_even_when_the_physics_is_right(tmp_path):
+    complete_workspace(tmp_path)
+    (tmp_path / "top_mass.pdf").unlink()
+    g = grade_workspace(open_spec(), tmp_path)
+    assert g.events.ok and g.peak.ok
+    assert g.plot_missing and not g.ok
+
+
+def test_a_missing_histogram_is_reported_not_silently_skipped(tmp_path):
+    complete_workspace(tmp_path)
+    (tmp_path / "top_mass_hist.json").unlink()
+    g = grade_workspace(open_spec(), tmp_path)
+    assert not g.ok
+    assert any("could not be checked" in n for n in g.notes)
+
+
+def test_events_found_under_another_name_are_still_graded(tmp_path):
+    complete_workspace(tmp_path)
+    (tmp_path / "unweighted_events.lhe.gz").rename(tmp_path / "events.lhe.gz")
+    g = grade_workspace(open_spec(), tmp_path)
+    assert g.events is not None and g.events.ok
+    assert any("nothing at unweighted_events" in n for n in g.notes)
+
+
+def test_a_sparse_histogram_reports_prominence_readably(tmp_path):
+    """An all-but-empty range makes prominence infinite; it must still read."""
+    edges = [100.0 + 5 * i for i in range(31)]
+    counts = [0] * 14 + [500] + [0] * 15
+    (tmp_path / "h.json").write_text(
+        json.dumps({"bin_edges_gev": edges, "counts": counts}))
+    r = verify_mass_peak(tmp_path / "h.json", expect_gev=172.5, tolerance_gev=15.0)
+    prom = [c for c in r.checks if c.name == "peak prominence"][0]
+    assert prom.ok and "inf" not in prom.detail
+    assert "sparse" in prom.detail

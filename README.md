@@ -261,10 +261,15 @@ There are two kinds of task here, and they measure different things.
 | | `madgraph-ttbar-lhe` (pinned) | `madgraph-ttbar-open` |
 |---|---|---|
 | The agent is given | the run card, the command, the steps | the required physics, nothing else |
-| The agent works out | nothing | how to get MadGraph, what card to write, how to run and check it |
+| The job | generate the events | generate → shower in Pythia8 → reconstruct the top mass peak |
+| The agent works out | nothing | how to get MadGraph and Pythia, what cards to write, how to reconstruct, how to plot |
 | Runs in | this repo | a scratch workspace outside it, containing only the brief |
 | Measures | the floor: executing a known solution | solving the problem |
 | Correctness is | guaranteed by construction | **an outcome**, graded per run |
+
+The open task is a three-step physics job, not a one-liner. The agent has to
+work out the decay channel, the jet definition, and the combinatorics on its
+own — that reasoning is the thing being measured.
 
 The pinned task exists as a control. Its brief hands over
 `cards/ttbar_lhe.mg5`, which is the complete answer — including the
@@ -312,20 +317,36 @@ uv run llm-energy verify-deliverable ~/llm-energy-workspaces/madgraph-ttbar-open
 ```
 
 ```
+events:   .../unweighted_events.lhe.gz
   ok    beam energy — 6800 / 6800 GeV, wanted 6800 each
-  ok    beam particles — PDG 2212 / 2212, wanted 2212 / 2212
-  FAIL  event count — 500 events, wanted 10000
-  FAIL  final state — found an event with final state (-5, 5), wanted (-6, 6)
-deliverable does NOT meet the specification
+  ok    event count — 10000 events, wanted 10000
+  ok    final state — all events (-6, 6)
+mass peak: .../top_mass_hist.json
+  ok    histogram parses — 30 bins, 100-250 GeV
+  ok    entries — 45119 entries, wanted at least 200
+  FAIL  peak is interior — tallest bin at 102.5 GeV — that is the edge of the
+        range, so the histogram shows a tail, not a peak
+  FAIL  peak position — 102.5 GeV, wanted 172.5 ± 15
+deliverables do NOT meet the specification
 ```
 
-Checks read the LHE payload — the `<init>` block and the event records — not
-the generator's banner. A sample produced by an unexpected route still passes;
-a convincing banner over the wrong physics still fails. The grading key lives
-in `tasks/madgraph-ttbar-open/spec.yaml` and is never shown to the agent.
+Event checks read the LHE payload — the `<init>` block and the event records —
+not the generator's banner. A sample produced by an unexpected route still
+passes; a convincing banner over the wrong physics still fails.
 
-A failed run is recorded, not discarded: a model that burns 300k tokens and
-produces nothing is a result.
+The peak is graded from `top_mass_hist.json`, which the brief asks for
+alongside the figure, because a plot cannot be checked automatically — relabel
+its axes and it looks the same to a grader. Four things are checked: the
+histogram parses, it has enough entries, the tallest bin is *interior* (a
+maximum in the end bin is a falling spectrum, not a peak), it sits within
+172.5 ± 15 GeV, and it rises above its own median bin. The window is wide on
+purpose: this is a *reconstructed* mass, so jets, combinatorics and
+out-of-cone losses shift and broaden it. A peak outside that window means the
+reconstruction is wrong, not that the physics is.
+
+The grading key lives in `tasks/madgraph-ttbar-open/spec.yaml` and is never
+shown to the agent. A failed run is recorded, not discarded: a model that
+burns 300k tokens and produces a W peak where a top peak belongs is a result.
 
 ## Separating compilation from execution
 

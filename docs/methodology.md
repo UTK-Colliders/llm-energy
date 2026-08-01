@@ -174,11 +174,18 @@ solution: reading a runbook, invoking one command, checking a number. That is
 a floor, not the quantity of interest, and it barely separates one model from
 another.
 
-An **open** task (`madgraph-ttbar-open`) states only the required output —
-process, order, beam energy, event count, seed, format — and leaves the method
-to the agent, which must work out that it needs MadGraph, how to obtain it,
-what card to write, how to invoke it, and how to check the result. The
-difference between the two isolates the cost of solving.
+An **open** task (`madgraph-ttbar-open`) states only the required output and
+leaves the method to the agent. It is a three-step physics job: generate the
+hard process in MadGraph, shower and hadronise it in Pythia 8, then
+reconstruct the top quark and show its invariant mass peak. The agent must
+work out that it needs both generators, how to obtain them, what cards to
+write, which decay channel to target, how to build jets, how to resolve the
+combinatorics, and how to plot the result. The difference between the two
+tasks isolates the cost of solving.
+
+The pinned task currently stops at the LHE file, so it is a control for step 1
+only. Extending it to match would require Pythia 8 in the image and a tested
+reconstruction script.
 
 ### Isolation
 
@@ -217,6 +224,30 @@ and energies, the event count, and the final-state PDG ids of every event —
 rather than the MG5 banner, which is free text the agent could have produced
 by any route. A sample generated unconventionally still passes; a plausible
 banner over the wrong physics still fails.
+
+### Grading a reconstructed mass peak
+
+The figure asked for in step 3 cannot be graded: relabel its axes and it looks
+the same to any checker. The brief therefore also requires the histogram as
+numbers (`bin_edges_gev`, `counts`), and the peak is judged from those.
+
+Four criteria, all reported with their measured values:
+
+- the histogram parses and its edges are monotonic;
+- it has at least a few hundred entries, below which a "peak" is noise;
+- the tallest bin is **interior** — a maximum in the first or last bin is a
+  falling spectrum whose range never covered the mass region, which would
+  otherwise pass a position check by accident;
+- the peak sits within 172.5 ± 15 GeV, and rises at least 1.5× above the
+  median bin.
+
+The window is wide deliberately. This is a *reconstructed* mass, not a
+generated one: jet clustering, wrong-pairing combinatorics and out-of-cone
+losses shift the peak down and broaden it, by amounts that depend on choices
+the agent is free to make. A peak outside the window indicates a broken
+reconstruction rather than new physics, which is exactly the failure worth
+catching. FWHM and prominence are recorded as information, not as pass/fail
+thresholds beyond the minimum above.
 
 Runs that fail are kept. A model that spends heavily and produces nothing
 usable is a data point about that model, not an absent measurement.

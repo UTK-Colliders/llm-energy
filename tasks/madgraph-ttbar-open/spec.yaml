@@ -2,19 +2,21 @@ schema_version: 1
 name: madgraph-ttbar-open
 kind: open
 description: >
-  The madgraph-ttbar-lhe physics, but the agent is given only the goal. No
-  card, no commands, no container: it works out how to produce the sample and
-  carries that out itself. Nothing here is shown to the agent — this file is
-  the operator's grading key, and BRIEF.md is what the agent reads.
+  The madgraph-ttbar-lhe physics carried through to a reconstructed top mass
+  peak, with the agent given only the goal. No card, no commands, no
+  container: it works out how to generate, shower and analyse, and carries
+  that out itself. Nothing here is shown to the agent — this file is the
+  operator's grading key, and BRIEF.md is what the agent reads.
 
+# Where the brief tells the agent to leave each artefact, relative to its
+# workspace. A file found elsewhere is graded anyway and noted.
 deliverable:
-  # where the brief tells the agent to leave the result, relative to its
-  # workspace; a file found elsewhere is graded anyway and noted
-  path: unweighted_events.lhe.gz
-  format: lhe
+  events: unweighted_events.lhe.gz
+  mass_histogram: top_mass_hist.json
+  mass_plot: top_mass.pdf
 
-# What the output must contain, checked against the LHE payload rather than
-# the generator's banner.
+# What the output must contain, checked against the LHE payload and the
+# histogram numbers rather than the generator's banner or the figure.
 requirements:
   process: "p p > t t~"
   order: LO
@@ -23,3 +25,12 @@ requirements:
   beam_pdg: [2212, 2212]
   final_state_pdg: [6, -6]
   seed: 42
+
+  # Reconstructed, not generated: jets, combinatorics and out-of-cone losses
+  # shift and broaden the peak, so the window is wide on purpose. A peak
+  # outside it means the reconstruction is wrong, not that the physics is.
+  top_mass_gev: 172.5
+  mass_tolerance_gev: 15.0
+  min_histogram_entries: 200
+  # a peak must rise above its own background to be one at all
+  min_peak_prominence: 1.5

@@ -489,34 +489,42 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
     """
     from llm_energy.deliverable import find_deliverable, load_open_spec
 
+    from llm_energy.deliverable import grade_workspace
+
     spec = load_open_spec(task_dir / task_name)
     if explicit is not None and not explicit.exists():
         # An explicit --file is a request to grade that file; falling back to
         # whatever else is lying around would answer a different question.
         raise click.ClickException(f"{explicit} does not exist")
-    target = explicit or (workspace / spec.deliverable_path)
-    if not target.exists():
-        found = find_deliverable(workspace)
-        if not found:
-            raise click.ClickException(
-                f"no LHE file anywhere under {workspace} — the run produced no "
-                "deliverable")
-        target = found[0]
-        console.print(f"[yellow]note: nothing at {spec.deliverable_path}; "
-                      f"grading {target.relative_to(workspace)} instead[/yellow]")
 
-    report = spec.verify(target)
-    console.print(f"[bold]{target}[/bold]")
-    for c in report.checks:
-        mark = "[green]ok[/green]" if c.ok else "[red]FAIL[/red]"
-        console.print(f"  {mark}  {c.name} — {c.detail}")
-    if report.events_sha256:
+    graded = grade_workspace(spec, workspace, events_override=explicit)
+    for note in graded.notes:
+        console.print(f"[yellow]note: {note}[/yellow]")
+    if graded.events is None:
+        raise click.ClickException(
+            f"no LHE file anywhere under {workspace} — the run produced no "
+            "deliverable")
+
+    def show(title, report):
+        console.print(f"[bold]{title}[/bold] {report.path}")
+        for c in report.checks:
+            mark = "[green]ok[/green]" if c.ok else "[red]FAIL[/red]"
+            console.print(f"  {mark}  {c.name} — {c.detail}")
+
+    show("events:", graded.events)
+    if graded.events.events_sha256:
         console.print(f"  [dim]event content sha256: "
-                      f"{report.events_sha256[:16]}[/dim]")
-    if report.ok:
-        console.print("[green]deliverable meets the specification[/green]")
+                      f"{graded.events.events_sha256[:16]}[/dim]")
+    if graded.peak is not None:
+        show("mass peak:", graded.peak)
+    if graded.plot_missing:
+        console.print(f"[red]FAIL[/red]  plot — nothing at "
+                      f"{spec.plot_path}")
+
+    if graded.ok:
+        console.print("[green]deliverables meet the specification[/green]")
     else:
-        console.print("[red]deliverable does NOT meet the specification[/red]")
+        console.print("[red]deliverables do NOT meet the specification[/red]")
         raise SystemExit(1)
 
 
@@ -593,20 +601,15 @@ def report_open(session_power: Path, session_result: Path,
     sp = _load_or_die(load_session_power, session_power, "session-power")
     se = _load_or_die(load_session_result, session_result, "session-energy")
 
-    deliverable = None
+    graded = None
     if workspace:
-        from llm_energy.deliverable import find_deliverable, load_open_spec
-        spec = load_open_spec(task_dir / task_name)
-        target = workspace / spec.deliverable_path
-        if not target.exists():
-            found = find_deliverable(workspace)
-            target = found[0] if found else None
-        deliverable = spec.verify(target) if target else None
+        from llm_energy.deliverable import grade_workspace, load_open_spec
+        graded = grade_workspace(load_open_spec(task_dir / task_name), workspace)
 
-    render_open_terminal(sp, se, deliverable)
+    render_open_terminal(sp, se, graded)
     if md:
         md.parent.mkdir(parents=True, exist_ok=True)
-        md.write_text(render_open_markdown(sp, se, deliverable))
+        md.write_text(render_open_markdown(sp, se, graded))
         console.print(f"wrote {md}")
 
 

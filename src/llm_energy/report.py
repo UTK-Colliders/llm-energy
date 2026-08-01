@@ -531,7 +531,7 @@ OPEN_CAVEATS = [
 
 
 def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
-              deliverable=None) -> list[tuple[str, str]]:
+              graded=None) -> list[tuple[str, str]]:
     b = se.total_band
     rows = [("Session wall time", f"{sp.wall_time_s:.0f} s "
                                   f"(mean {sp.mean_power_w:.2f} W)")]
@@ -569,13 +569,34 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
         ("E_LLM (low/central/high, estimated)",
          f"{b.low_j:.0f} / {b.central_j:.0f} / {b.high_j:.0f} J"),
     ]
-    if deliverable is not None:
-        verdict = "MET" if deliverable.ok else "NOT MET"
-        rows.append(("Deliverable", f"{verdict} — {deliverable.n_events} events"))
-        for c in deliverable.failures:
-            rows.append((f"  failed: {c.name}", c.detail))
-    elif deliverable is None:
-        rows.append(("Deliverable", "not checked"))
+    if graded is None:
+        rows.append(("Deliverables", "not checked"))
+        return rows
+
+    rows.append(("Deliverables", "MET" if graded.ok else "NOT MET"))
+    ev = graded.events
+    if ev is None:
+        rows.append(("  events", "missing"))
+    else:
+        rows.append(("  events", f"{ev.n_events} events, "
+                                 + ("ok" if ev.ok else "failed")))
+        for c in ev.failures:
+            rows.append((f"    {c.name}", c.detail))
+    peak = graded.peak
+    if peak is not None:
+        if not peak.exists:
+            rows.append(("  top mass peak", "no histogram"))
+        else:
+            where = (f"{peak.peak_gev:.1f} GeV" if peak.peak_gev is not None
+                     else "no peak found")
+            width = f", FWHM ~{peak.fwhm_gev:.0f} GeV" if peak.fwhm_gev else ""
+            rows.append(("  top mass peak",
+                         f"{where}{width}, {peak.entries} entries — "
+                         + ("ok" if peak.ok else "failed")))
+            for c in peak.failures:
+                rows.append((f"    {c.name}", c.detail))
+    if graded.plot_missing:
+        rows.append(("  plot", "missing"))
     return rows
 
 
@@ -589,7 +610,7 @@ CONTAINER_HEADERS = ["Container", "Image", "Wall", "Energy", "Mean power"]
 
 
 def render_open_terminal(sp: SessionPowerResult, se: SessionEnergyResult,
-                         deliverable=None) -> None:
+                         graded=None) -> None:
     from rich.console import Console
     from rich.table import Table
 
@@ -597,7 +618,7 @@ def render_open_terminal(sp: SessionPowerResult, se: SessionEnergyResult,
     table = Table(title="llm-energy: open task")
     table.add_column("Quantity")
     table.add_column("Value")
-    for k, v in open_rows(sp, se, deliverable):
+    for k, v in open_rows(sp, se, graded):
         table.add_row(k, v)
     console.print(table)
 
@@ -617,12 +638,12 @@ def render_open_terminal(sp: SessionPowerResult, se: SessionEnergyResult,
 
 
 def render_open_markdown(sp: SessionPowerResult, se: SessionEnergyResult,
-                         deliverable=None) -> str:
+                         graded=None) -> str:
     lines = ["# llm-energy report: open task", ""]
     lines.append(f"Machine: {sp.machine.chip or sp.machine.hostname} "
                  f"({sp.machine.platform}) — {sp.created_at}")
     lines += ["", "| Quantity | Value |", "|---|---|"]
-    lines += [f"| {k} | {v} |" for k, v in open_rows(sp, se, deliverable)]
+    lines += [f"| {k} | {v} |" for k, v in open_rows(sp, se, graded)]
     if sp.containers:
         lines += ["", "## Containers the agent ran", "",
                   "| " + " | ".join(CONTAINER_HEADERS) + " |",
