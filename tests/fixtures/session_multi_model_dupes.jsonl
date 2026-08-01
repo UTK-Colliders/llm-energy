@@ -1,0 +1,8 @@
+{"type":"user","cwd":"/Users/prof/llm-energy","timestamp":"2026-08-01T16:00:00.000Z","message":{"role":"user","content":"run the task"}}
+{"type":"assistant","timestamp":"2026-08-01T16:00:05.000Z","message":{"id":"msg_a","model":"claude-fable-5","usage":{"input_tokens":2,"output_tokens":10,"cache_creation_input_tokens":38074,"cache_read_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-08-01T16:00:07.000Z","message":{"id":"msg_a","model":"claude-fable-5","usage":{"input_tokens":2,"output_tokens":300,"cache_creation_input_tokens":38074,"cache_read_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-08-01T16:00:08.000Z","message":{"id":"msg_a","model":"claude-fable-5","usage":{"input_tokens":2,"output_tokens":496,"cache_creation_input_tokens":38074,"cache_read_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-08-01T16:00:20.000Z","isSidechain":true,"message":{"id":"msg_side","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":500,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-08-01T16:00:30.000Z","message":{"id":"msg_synth","model":"<synthetic>","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+not valid json at all
+{"type":"assistant","timestamp":"2026-08-01T16:05:00.000Z","message":{"id":"msg_b","model":"claude-fable-5","usage":{"input_tokens":4,"output_tokens":120,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000}}}

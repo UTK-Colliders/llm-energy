@@ -1,0 +1,54 @@
+# Token -> energy coefficients (Joules per token unless noted).
+#
+# These are literature-derived ESTIMATE ENVELOPES, not measurements. Anthropic
+# publishes no per-token energy figures, so we bracket with public sources and
+# report low/central/high everywhere. Derivations: docs/methodology.md.
+#
+# Key anchors:
+#  - Epoch AI (Feb 2025), "How much energy does ChatGPT use?": ~0.3 Wh (1080 J)
+#    for a typical GPT-4o query with a ~500-token response -> ~2 J/output token.
+#    https://epoch.ai/gradient-updates/how-much-energy-does-chatgpt-use
+#  - Google (Aug 2025), Gemini production disclosure: 0.24 Wh (864 J) median
+#    text prompt, INCLUDING datacenter overhead (PUE) and idle capacity.
+#  - Samsi et al., "From Words to Watts" (arXiv:2310.03003): measured LLaMA
+#    inference on A100/V100.
+#  - "From Tokens to Watt-hours" (arXiv:2607.26571): ~0.0001-0.002 Wh
+#    (0.36-7.2 J) per output token across modern GPUs -> our low/high rails.
+#  - Mistral Large 2 lifecycle analysis (Jul 2025).
+#
+# Semantics:
+#  - output tokens dominate (autoregressive decode); input/prefill is roughly
+#    an order of magnitude cheaper per token; cache reads roughly another
+#    order cheaper; cache creation priced like input processing.
+#  - The band is an ENVELOPE: "low" uses low coefficients everywhere, "high"
+#    uses high everywhere. It is not a statistical confidence interval.
+#  - pue.value multiplies any model whose pue_included is false.
+
+schema_version: 1
+units: joules_per_token
+
+pue:
+  value: 1.2
+  source: >
+    Google 2024-2025 fleet PUE ~1.09; global datacenter average ~1.5-1.6
+    (Uptime Institute 2024). 1.2 adopted as central for frontier-lab-scale
+    infrastructure.
+
+defaults:
+  input:          {low: 0.02,  central: 0.10, high: 0.50}
+  output:         {low: 0.40,  central: 2.00, high: 7.00}
+  cache_read:     {low: 0.002, central: 0.01, high: 0.05}
+  cache_creation: {low: 0.02,  central: 0.10, high: 0.50}
+  per_request_overhead_j: {low: 0.0, central: 20.0, high: 100.0}
+  pue_included: false
+
+models:
+  - match: "claude-*"
+    inherit: defaults
+    pue_included: false
+    sources:
+      - "Epoch AI (Feb 2025): GPT-4o ~0.3 Wh/query at ~500 output tokens"
+      - "Google (Aug 2025): 0.24 Wh median Gemini text prompt, incl. PUE"
+      - "arXiv:2607.26571: 0.36-7.2 J/output token measured on modern GPUs"
+      - "arXiv:2310.03003 (From Words to Watts)"
+      - "Mistral Large 2 LCA (Jul 2025)"
