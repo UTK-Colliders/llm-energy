@@ -23,6 +23,25 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _resolve_baseline(baseline_arg: str, out: Path):
+    """(BaselineResult | None, ref) from 'latest' | a path | 'none'."""
+    from llm_energy import machine_info
+    from llm_energy.baseline import find_latest_baseline
+    from llm_energy.schemas import load_baseline
+
+    if baseline_arg == "latest":
+        p = find_latest_baseline(out, machine_info.collect(include_docker=False))
+        if p is None:
+            raise click.ClickException(
+                "no baseline for this machine in results/ — run `llm-energy "
+                "baseline` first, or pass --baseline none")
+        return load_baseline(p), str(p)
+    if baseline_arg not in ("none", ""):
+        p = Path(baseline_arg)
+        return load_baseline(p), str(p)
+    return None, None
+
+
 @click.group()
 @click.version_option(version=__version__)
 def main():
@@ -143,28 +162,14 @@ def run_task_cmd(task_name: str, task_dir: Path, baseline_arg: str,
                  image_variant: str | None, interval_ms: int,
                  backend_name: str | None, out: Path):
     """Run a task under energy measurement."""
-    from llm_energy import machine_info
-    from llm_energy.baseline import find_latest_baseline
     from llm_energy.config import find_task
     from llm_energy.power import get_backend
-    from llm_energy.schemas import load_baseline, write_result
+    from llm_energy.schemas import write_result
     from llm_energy.task_runner import TaskRunError, run_task
 
     out.mkdir(parents=True, exist_ok=True)
     task = find_task(task_name, task_dir)
-
-    base = None
-    base_ref = None
-    if baseline_arg == "latest":
-        p = find_latest_baseline(out, machine_info.collect(include_docker=False))
-        if p is None:
-            raise click.ClickException(
-                "no baseline for this machine in results/ — run `llm-energy baseline` "
-                "first, or pass --baseline none")
-        base, base_ref = load_baseline(p), str(p)
-    elif baseline_arg not in ("none", ""):
-        p = Path(baseline_arg)
-        base, base_ref = load_baseline(p), str(p)
+    base, base_ref = _resolve_baseline(baseline_arg, out)
 
     backend = get_backend(backend_name)
     if not backend.probe().ok:
@@ -187,9 +192,77 @@ def run_task_cmd(task_name: str, task_dir: Path, baseline_arg: str,
     console.print(f"gross {result.gross_joules:.1f} J{net} over "
                   f"{result.wall_time_s:.1f} s "
                   f"(mean {result.mean_power_w:.2f} W) -> {path}")
+    if result.coordinating_session_id:
+        console.print(f"[dim]coordinating session: "
+                      f"{result.coordinating_session_id[:8]} — pair with "
+                      f"`analyze-session --for-task {path}`[/dim]")
+    else:
+        console.print("[yellow]note: no CLAUDE_CODE_SESSION_ID in the "
+                      "environment, so this run is not linked to a "
+                      "coordination session[/yellow]")
     if result.emulated:
         console.print("[yellow]warning: image ran under emulation — energy is "
                       "not representative of native execution[/yellow]")
+
+
+# --- measure-session ---------------------------------------------------------
+
+@main.command("measure-session")
+@click.argument("command", nargs=-1)
+@click.option("--baseline", "baseline_arg", default="latest", show_default=True,
+              help="baseline JSON path, 'latest', or 'none'")
+@click.option("--interval-ms", default=1000, show_default=True)
+@click.option("--backend", "backend_name", default=None,
+              type=click.Choice(["powermetrics", "rapl", "tdp-model"]))
+@click.option("--cwd", type=click.Path(path_type=Path), default=None,
+              help="working directory for the session [default: current]")
+@click.option("--out", type=click.Path(path_type=Path), default=DEFAULT_RESULTS,
+              show_default=True)
+def measure_session_cmd(command: tuple[str, ...], baseline_arg: str,
+                        interval_ms: int, backend_name: str | None,
+                        cwd: Path | None, out: Path):
+    """Measure package power for a whole coordination session.
+
+    Runs COMMAND (default: `claude`) under power measurement and records the
+    energy this machine spent while the agent worked — thinking, reading
+    files, running commands — with the measured task run nested inside it.
+    Sessions started during the window are linked automatically.
+
+    Example:
+      llm-energy measure-session -- claude "do the madgraph-ttbar-lhe task"
+    """
+    from llm_energy.power import get_backend
+    from llm_energy.schemas import write_result
+    from llm_energy.session_power import measure_session
+
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = list(command) or ["claude"]
+    cwd = cwd or Path.cwd()
+    base, base_ref = _resolve_baseline(baseline_arg, out)
+
+    backend = get_backend(backend_name)
+    if not backend.probe().ok:
+        raise click.ClickException(f"backend {backend.name} not usable; run doctor")
+
+    console.print(f"Measuring [bold]{' '.join(cmd)}[/bold] with {backend.name}. "
+                  "Everything this machine does until it exits counts as "
+                  "coordination.")
+    result = measure_session(cmd, backend, out, baseline=base,
+                             baseline_ref=base_ref, interval_ms=interval_ms,
+                             cwd=cwd)
+
+    path = write_result(result, out / f"session-power-{_ts()}.json")
+    net = f", net {result.net_joules:.1f} J" if result.net_joules is not None else ""
+    console.print(f"session gross {result.gross_joules:.1f} J{net} over "
+                  f"{result.wall_time_s:.0f} s "
+                  f"(mean {result.mean_power_w:.2f} W) -> {path}")
+    if result.session_ids:
+        console.print("linked session(s): " +
+                      ", ".join(s[:8] for s in result.session_ids))
+    for n in result.notes:
+        console.print(f"[yellow]note: {n}[/yellow]")
+    if result.exit_code != 0:
+        console.print(f"[yellow]command exited {result.exit_code}[/yellow]")
 
 
 # --- sessions ---------------------------------------------------------------
@@ -223,6 +296,12 @@ def list_sessions(cwd: Path | None, since: str | None, all_projects: bool):
 @click.option("--session-id", "session_ids", multiple=True,
               help="session id (prefix ok); repeat to merge several sessions")
 @click.option("--latest", is_flag=True, help="use the most recent session")
+@click.option("--for-task", "for_task", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="analyze the session that coordinated this task result JSON")
+@click.option("--for-session-power", "for_session_power", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="analyze the session(s) linked to a measure-session result")
 @click.option("--cwd", type=click.Path(path_type=Path), default=None)
 @click.option("--coefficients", type=click.Path(path_type=Path), default=DEFAULT_COEFFS,
               show_default=True)
@@ -231,15 +310,45 @@ def list_sessions(cwd: Path | None, since: str | None, all_projects: bool):
               help="explicit transcript JSONL path(s), bypassing lookup")
 @click.option("--out", type=click.Path(path_type=Path), default=DEFAULT_RESULTS,
               show_default=True)
-def analyze_session(session_ids: tuple[str, ...], latest: bool, cwd: Path | None,
-                    coefficients: Path, transcripts: tuple[Path, ...], out: Path):
+def analyze_session(session_ids: tuple[str, ...], latest: bool,
+                    for_task: Path | None, for_session_power: Path | None,
+                    cwd: Path | None, coefficients: Path,
+                    transcripts: tuple[Path, ...], out: Path):
     """Sum a session's tokens and estimate its energy band."""
-    from llm_energy.schemas import write_result
+    from llm_energy.schemas import (load_session_power, load_task_result,
+                                    write_result)
     from llm_energy.session.energy import energy_band, load_coefficients
     from llm_energy.session.locate import find_session_by_id, find_sessions
     from llm_energy.session.parse import merge_usages, parse_session
 
+    def resolve(sid: str, origin: str) -> tuple[Path, str]:
+        info = find_session_by_id(sid)
+        if info is None:
+            raise click.ClickException(
+                f"{origin} recorded session '{sid}', but no transcript for it "
+                "was found — a different machine, or ~/.claude/projects pruned?")
+        return info.path, info.session_id
+
     files: list[tuple[Path, str]] = [(p, p.stem) for p in transcripts]
+
+    if for_task:
+        task = load_task_result(for_task)
+        if not task.coordinating_session_id:
+            raise click.ClickException(
+                f"{for_task} has no coordinating_session_id — it was produced "
+                "outside a Claude Code session, or by an older version of this "
+                "tool. Pass --session-id explicitly.")
+        files.append(resolve(task.coordinating_session_id, str(for_task)))
+
+    if for_session_power:
+        sp = load_session_power(for_session_power)
+        if not sp.session_ids:
+            raise click.ClickException(
+                f"{for_session_power} has no linked sessions — no transcript "
+                "started inside the measured window. Pass --session-id "
+                "explicitly.")
+        files.extend(resolve(s, str(for_session_power)) for s in sp.session_ids)
+
     for sid in session_ids:
         info = find_session_by_id(sid)
         if info is None:
@@ -251,7 +360,20 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool, cwd: Path | None
             raise click.ClickException("no sessions found")
         files.append((infos[0].path, infos[0].session_id))
     if not files:
-        raise click.ClickException("give --session-id, --latest, or --transcript")
+        raise click.ClickException(
+            "give --for-task, --for-session-power, --session-id, --latest, "
+            "or --transcript")
+
+    # the same transcript can arrive from several selectors; counting it twice
+    # would inflate the band
+    seen: set[Path] = set()
+    unique: list[tuple[Path, str]] = []
+    for p, sid in files:
+        if p in seen:
+            continue
+        seen.add(p)
+        unique.append((p, sid))
+    files = unique
 
     usages = [parse_session(p.read_text().splitlines(), session_id=sid)
               for p, sid in files]
@@ -277,19 +399,26 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool, cwd: Path | None
 @main.command("report")
 @click.argument("task_result", type=click.Path(path_type=Path, exists=True))
 @click.argument("session_result", type=click.Path(path_type=Path, exists=True))
+@click.option("--session-power", "session_power", default=None,
+              type=click.Path(path_type=Path, exists=True),
+              help="measure-session result, adding the locally-measured cost "
+                   "of coordination to the report")
 @click.option("--md", type=click.Path(path_type=Path), default=None,
               help="write markdown report here")
 @click.option("--chart", type=click.Path(path_type=Path), default=None,
               help="write bar chart PNG here (needs [plots] extra)")
-def report_cmd(task_result: Path, session_result: Path, md: Path | None,
-               chart: Path | None):
+def report_cmd(task_result: Path, session_result: Path,
+               session_power: Path | None, md: Path | None, chart: Path | None):
     """Compare one task run against one coordination session."""
     from llm_energy.report import (Trial, render_chart, render_markdown,
                                    render_terminal)
-    from llm_energy.schemas import load_session_result, load_task_result
+    from llm_energy.schemas import (load_session_power, load_session_result,
+                                    load_task_result)
 
     trial = Trial(label="run", task=load_task_result(task_result),
-                  session=load_session_result(session_result))
+                  session=load_session_result(session_result),
+                  session_power=(load_session_power(session_power)
+                                 if session_power else None))
     render_terminal(trial)
     if md:
         md.parent.mkdir(parents=True, exist_ok=True)

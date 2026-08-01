@@ -116,10 +116,49 @@ class TaskRunResult:
     power_trace_file: str | None = None
     task_metadata: dict[str, Any] = field(default_factory=dict)
     machine: MachineInfo = field(default_factory=MachineInfo)
+    # Claude Code session that invoked this run, captured from
+    # CLAUDE_CODE_SESSION_ID. Lets `analyze-session --for-task` pair the run
+    # with the exact conversation that coordinated it, instead of guessing by
+    # mtime. None when run-task was invoked outside a Claude Code session.
+    coordinating_session_id: str | None = None
+    started_at: str = ""
+    ended_at: str = ""
     schema_version: int = SCHEMA_VERSION
     tool_version: str = __version__
     created_at: str = field(default_factory=now_iso)
     kind: str = "task-run"
+
+
+@dataclass
+class SessionPowerResult:
+    """Package power measured across a whole coordination session.
+
+    `run-task` measures only the container's window; this covers the entire
+    time the agent was working locally — thinking, reading files, running
+    exploratory commands — with the measured task run nested inside it.
+    """
+    command: list[str]
+    wall_time_s: float
+    gross_joules: float
+    baseline_ref: str | None
+    baseline_mean_w: float | None
+    net_joules: float | None
+    mean_power_w: float
+    alignment_uncertainty_j: float
+    backend: str
+    exit_code: int
+    started_at: str = ""
+    ended_at: str = ""
+    # sessions whose transcript began inside the measured window
+    session_ids: list[str] = field(default_factory=list)
+    cwd: str | None = None
+    power_trace_file: str | None = None
+    notes: list[str] = field(default_factory=list)
+    machine: MachineInfo = field(default_factory=MachineInfo)
+    schema_version: int = SCHEMA_VERSION
+    tool_version: str = __version__
+    created_at: str = field(default_factory=now_iso)
+    kind: str = "session-power"
 
 
 @dataclass
@@ -215,6 +254,12 @@ def load_task_result(path: Path) -> TaskRunResult:
     data = json.loads(path.read_text())
     data["machine"] = _from_dict(MachineInfo, data.get("machine", {}))
     return _from_dict(TaskRunResult, data)
+
+
+def load_session_power(path: Path) -> SessionPowerResult:
+    data = json.loads(path.read_text())
+    data["machine"] = _from_dict(MachineInfo, data.get("machine", {}))
+    return _from_dict(SessionPowerResult, data)
 
 
 def load_session_result(path: Path) -> SessionEnergyResult:

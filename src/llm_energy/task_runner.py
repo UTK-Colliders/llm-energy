@@ -8,6 +8,7 @@ from pathlib import Path
 from llm_energy import docker_util, machine_info
 from llm_energy.config import TaskSpec
 from llm_energy.schemas import BaselineResult, TaskRunResult, now_iso
+from llm_energy.session.locate import current_session_id
 
 
 class TaskRunError(RuntimeError):
@@ -38,6 +39,11 @@ def run_task(task: TaskSpec,
     run_dir = out_dir / f"run-{task.name}-{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     raw_path = run_dir / "power-trace.txt"
+
+    # If the coordinating agent invoked this, record which conversation it was
+    # so the run can be paired with its token cost without mtime guessing.
+    coordinating_session_id = current_session_id()
+    started_at = now_iso()
 
     interval_s = interval_ms / 1000.0
     backend_start_mono = time.monotonic()
@@ -103,6 +109,9 @@ def run_task(task: TaskSpec,
         power_trace_file=str(raw_path) if raw_path.exists() else None,
         task_metadata=task.metadata,
         machine=machine_info.collect(),
+        coordinating_session_id=coordinating_session_id,
+        started_at=started_at,
+        ended_at=now_iso(),
     )
     if run.exit_code != 0:
         raise TaskRunError(

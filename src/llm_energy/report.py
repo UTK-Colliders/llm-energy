@@ -9,10 +9,12 @@ events are physically identical.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from llm_energy.lhe import compare_lhe
-from llm_energy.schemas import SessionEnergyResult, TaskRunResult
+from llm_energy.schemas import (EnergyBand, SessionEnergyResult,
+                                SessionPowerResult, TaskRunResult)
 
 CAVEATS = [
     "E_task is SoC package power (CPU+GPU+ANE) integrated over the run — not "
@@ -26,9 +28,74 @@ CAVEATS = [
     "excluded on both sides.",
 ]
 
+LOCAL_COORD_CAVEAT = (
+    "E_coord,local is this machine's package energy over the session window "
+    "minus the nested task run — the local cost of the agent working. It is "
+    "measured on the same instrument as E_task, so the two are directly "
+    "comparable; E_LLM is not (it is estimated remote datacenter energy)."
+)
+
 
 def _wh(j: float) -> float:
     return j / 3600.0
+
+
+def _iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@dataclass
+class LocalCoordination:
+    """Locally-measured energy of coordination: session window minus task."""
+    joules: float
+    basis: str                       # "net of idle baseline" | "gross"
+    session_joules: float
+    task_joules: float
+    notes: list[str] = field(default_factory=list)
+
+
+def local_coordination(sp: SessionPowerResult,
+                       task: TaskRunResult) -> LocalCoordination:
+    """Subtract the nested task run from the session-window measurement.
+
+    Uses net-of-baseline energy when both sides carry a baseline (the idle
+    term must be removed from both windows or not at all); otherwise gross.
+    """
+    notes: list[str] = []
+    if sp.net_joules is not None and task.net_joules is not None:
+        session_j, task_j, basis = sp.net_joules, task.net_joules, "net of idle baseline"
+    else:
+        session_j, task_j, basis = sp.gross_joules, task.gross_joules, "gross"
+        if sp.net_joules is not None or task.net_joules is not None:
+            notes.append("only one of the two runs had a baseline, so gross "
+                         "energy is used for both")
+
+    if sp.backend != task.backend:
+        notes.append(f"session measured with {sp.backend}, task with "
+                     f"{task.backend} — not directly comparable")
+
+    t_start, t_end = _iso(sp.started_at), _iso(sp.ended_at)
+    task_start, task_end = _iso(task.started_at), _iso(task.ended_at)
+    if t_start and t_end and task_start and task_end:
+        if not (t_start <= task_start and task_end <= t_end):
+            notes.append("the task run does not lie inside the measured "
+                         "session window — subtracting it is not meaningful")
+    else:
+        notes.append("task run window unknown (older result), so its nesting "
+                     "inside the session window could not be verified")
+
+    joules = session_j - task_j
+    if joules < 0:
+        notes.append("negative after subtraction — the task run appears to "
+                     "account for more energy than the whole session window")
+    return LocalCoordination(joules=joules, basis=basis, session_joules=session_j,
+                             task_joules=task_j, notes=notes)
 
 
 @dataclass
@@ -36,9 +103,24 @@ class Trial:
     label: str
     task: TaskRunResult
     session: SessionEnergyResult
+    session_power: SessionPowerResult | None = None
 
     def models(self) -> str:
         return ", ".join(m.model for m in self.session.usage.per_model)
+
+    def local_coordination(self) -> LocalCoordination | None:
+        if self.session_power is None:
+            return None
+        return local_coordination(self.session_power, self.task)
+
+    def total_coordination_band(self) -> EnergyBand | None:
+        """E_LLM (estimated remote) + E_coord,local (measured here)."""
+        lc = self.local_coordination()
+        if lc is None:
+            return None
+        b = self.session.total_band
+        return EnergyBand(b.low_j + lc.joules, b.central_j + lc.joules,
+                          b.high_j + lc.joules)
 
     def total_tokens(self) -> int:
         return sum(m.total_tokens() for m in self.session.usage.per_model)
@@ -134,6 +216,28 @@ def _trial_rows(t: Trial) -> list[tuple[str, str]]:
     ]
     lo, mid, hi = t.ratio_band()
     rows.append(("E_LLM / E_task", f"{lo:.2f} / {mid:.2f} / {hi:.2f}"))
+
+    lc = t.local_coordination()
+    if lc is not None and t.session_power is not None:
+        sp = t.session_power
+        tb = t.total_coordination_band()
+        rows += [
+            ("Session wall time", f"{sp.wall_time_s:.0f} s "
+                                  f"(mean {sp.mean_power_w:.2f} W)"),
+            (f"Session energy ({lc.basis})",
+             f"{lc.session_joules:.1f} J ({_wh(lc.session_joules):.3f} Wh)"),
+            ("E_coord,local (session − task, measured)",
+             f"{lc.joules:.1f} J ({_wh(lc.joules):.3f} Wh)"),
+            ("E_coord,total = E_LLM + E_coord,local",
+             f"{tb.low_j:.0f} / {tb.central_j:.0f} / {tb.high_j:.0f} J "
+             f"({_wh(tb.low_j):.3f} / {_wh(tb.central_j):.3f} / "
+             f"{_wh(tb.high_j):.3f} Wh)"),
+        ]
+        e = t.task_energy_j()
+        if e > 0:
+            rows.append(("E_coord,total / E_task",
+                         f"{tb.low_j / e:.2f} / {tb.central_j / e:.2f} / "
+                         f"{tb.high_j / e:.2f}"))
     return rows
 
 
@@ -147,6 +251,10 @@ def render_markdown(trial: Trial) -> str:
         lines.append(f"| LHE events | {trial.task.outputs['lhe_file_nevents']} |")
     lines += ["", "## Caveats", ""]
     lines += [f"- {c}" for c in CAVEATS]
+    lc = trial.local_coordination()
+    if lc is not None:
+        lines.append(f"- {LOCAL_COORD_CAVEAT}")
+        lines += [f"- {n}" for n in lc.notes]
     for n in trial.session.notes:
         lines.append(f"- {n}")
     return "\n".join(lines) + "\n"
@@ -205,8 +313,11 @@ def render_terminal(trial: Trial) -> None:
     for k, v in _trial_rows(trial):
         table.add_row(k, v)
     console.print(table)
+    lc = trial.local_coordination()
+    for n in (lc.notes if lc else []):
+        console.print(f"[yellow]note: {n}[/yellow]")
     console.print("[dim]Caveats:[/dim]")
-    for c in CAVEATS:
+    for c in CAVEATS + ([LOCAL_COORD_CAVEAT] if lc else []):
         console.print(f"[dim] - {c}[/dim]")
 
 
