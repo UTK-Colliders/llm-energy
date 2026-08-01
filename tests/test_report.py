@@ -293,3 +293,13 @@ def test_phase_energy_uses_gross_when_no_baseline():
     t.phases = [make_phase("compile", 3000.0, None), make_phase("run", 1000.0, None)]
     rows = phase_table(t)
     assert rows[0][2].startswith("3000.0 J")
+
+
+def test_clock_skew_is_flagged_rather_than_reading_as_a_clean_split():
+    """Unattributed compiler output must not look like 'nothing compiled'."""
+    t = split_task(compile_art=0, generate_art=0)
+    t.outputs["unattributed_build_artifacts"] = 142
+    leak = compilation_leak(t)
+    assert leak is not None
+    assert "outside every phase window" in leak and "clock" in leak
+    assert "**Warning:**" in render_markdown(Trial("run", t, make_session_result()))

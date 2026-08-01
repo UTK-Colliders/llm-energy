@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from llm_energy import docker_util, machine_info
-from llm_energy.build_artifacts import count_build_artifacts
+from llm_energy.build_artifacts import (count_build_artifacts,
+                                        unattributed_artifacts)
 from llm_energy.config import TaskSpec
 from llm_energy.schemas import (BaselineResult, PhaseResult, TaskRunResult,
                                 now_iso)
@@ -112,6 +113,9 @@ def run_task(task: TaskSpec,
     mean_w = gross_j / wall_time_s if wall_time_s > 0 else 0.0
     cpu_seconds = [p.container_cpu_seconds for p in phase_results
                    if p.container_cpu_seconds is not None]
+    # each phase window carries its own ~1-interval skew; they add
+    alignment_j = sum(p.alignment_uncertainty_j for p in phase_results)
+    stats_samples = [s for _, r, _, _ in runs for s in r.stats_samples]
 
     net_j = None
     baseline_mean_w = None
@@ -121,6 +125,10 @@ def run_task(task: TaskSpec,
 
     outputs: dict = {"container_log": str(run_dir / "container.log"),
                      "stdout_tail": run.stdout_tail if run.exit_code != 0 else ""}
+    orphaned = unattributed_artifacts(
+        run_dir, sum(p.build_artifacts_written for p in phase_results))
+    if orphaned:
+        outputs["unattributed_build_artifacts"] = orphaned
     missing = []
     for exp in task.expected_outputs:
         matches = sorted(run_dir.glob(exp.glob))
@@ -151,10 +159,10 @@ def run_task(task: TaskSpec,
         baseline_mean_w=baseline_mean_w,
         net_joules=net_j,
         mean_power_w=mean_w,
-        alignment_uncertainty_j=mean_w * interval_s,
+        alignment_uncertainty_j=alignment_j,
         backend=trace.backend,
         container_cpu_seconds=sum(cpu_seconds) if cpu_seconds else None,
-        docker_stats_samples=run.stats_samples,
+        docker_stats_samples=stats_samples,
         exit_code=run.exit_code,
         outputs=outputs,
         power_trace_file=str(raw_path) if raw_path.exists() else None,

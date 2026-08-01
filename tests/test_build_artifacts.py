@@ -70,3 +70,19 @@ def test_directories_named_like_artifacts_are_skipped(tmp_path):
 def test_missing_root_is_not_an_error(tmp_path):
     got = count_build_artifacts(tmp_path / "nope", T0, T0 + timedelta(minutes=1))
     assert got.count == 0 and got.examples == []
+
+
+def test_unbounded_count_covers_the_whole_tree(tmp_path):
+    touch(tmp_path / "old.o", T0 - timedelta(days=400))
+    touch(tmp_path / "new.o", T0 + timedelta(days=400))
+    assert count_build_artifacts(tmp_path).count == 2
+
+
+def test_unattributed_artifacts_reports_the_shortfall(tmp_path):
+    from llm_energy.build_artifacts import unattributed_artifacts
+    for i in range(5):
+        touch(tmp_path / f"o{i}.o", T0)
+    assert unattributed_artifacts(tmp_path, attributed=5) == 0
+    assert unattributed_artifacts(tmp_path, attributed=2) == 3
+    # over-attribution cannot go negative
+    assert unattributed_artifacts(tmp_path, attributed=9) == 0

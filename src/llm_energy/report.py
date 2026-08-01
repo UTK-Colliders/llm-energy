@@ -114,6 +114,13 @@ def compilation_leak(task: TaskRunResult) -> str | None:
     compile phase. Several phases writing build artifacts means energy that
     belongs to one bucket was billed to another.
     """
+    orphaned = task.outputs.get("unattributed_build_artifacts", 0)
+    if orphaned:
+        # Would otherwise read as a clean split: unattributed compiler output
+        # looks like "nothing compiled in this phase".
+        return (f"{orphaned} build artifacts fall outside every phase window, "
+                "so the split could not be verified — most likely the "
+                "container clock has drifted from the host's")
     building = [p.name for p in task.phases if p.build_artifacts_written > 0]
     if len(building) < 2:
         return None
