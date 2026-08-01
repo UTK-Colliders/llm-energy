@@ -222,3 +222,74 @@ def test_comparison_markdown_with_partial_session_power():
     assert "E_coord,local" in md
     assert "2500.0" in md          # fable's measured local cost
     assert "n/a" in md             # haiku has no session-power result
+
+
+# --- phase breakdown ---------------------------------------------------------
+
+from llm_energy.report import compilation_leak, phase_table  # noqa: E402
+from llm_energy.schemas import PhaseResult  # noqa: E402
+
+
+def make_phase(name, gross, net=None, artifacts=0, wall=100.0):
+    return PhaseResult(
+        name=name, command=["x"], wall_time_s=wall, gross_joules=gross,
+        net_joules=net, mean_power_w=gross / wall, alignment_uncertainty_j=1.0,
+        exit_code=0, build_artifacts_written=artifacts,
+        build_artifact_examples=["a.o"] if artifacts else [])
+
+
+def split_task(compile_j=3000.0, generate_j=1000.0, compile_art=120,
+               generate_art=0):
+    t = make_task_result(net=4000.0)
+    t.phases = [make_phase("codegen-compile", compile_j, compile_j, compile_art),
+                make_phase("event-generation", generate_j, generate_j, generate_art)]
+    return t
+
+
+def test_phase_shares_sum_to_one_hundred_percent():
+    rows = phase_table(split_task())
+    assert [r[0] for r in rows] == ["codegen-compile", "event-generation"]
+    assert rows[0][3] == "75.0%"
+    assert rows[1][3] == "25.0%"
+
+
+def test_phase_table_reports_build_artifacts_per_phase():
+    rows = phase_table(split_task(compile_art=120, generate_art=0))
+    assert rows[0][-1] == "120"
+    assert rows[1][-1] == "0"
+
+
+def test_clean_split_raises_no_warning():
+    assert compilation_leak(split_task(compile_art=120, generate_art=0)) is None
+
+
+def test_compilation_spread_across_phases_is_flagged():
+    leak = compilation_leak(split_task(compile_art=120, generate_art=7))
+    assert leak is not None
+    assert "codegen-compile" in leak and "event-generation" in leak
+    assert "did not hold" in leak
+
+
+def test_single_phase_task_needs_no_phase_section():
+    md = render_markdown(Trial("run", make_task_result(), make_session_result()))
+    assert "## Task phases" not in md
+
+
+def test_phase_section_rendered_for_a_split_task():
+    md = render_markdown(Trial("run", split_task(), make_session_result()))
+    assert "## Task phases" in md
+    assert "codegen-compile" in md and "event-generation" in md
+    assert "75.0%" in md
+
+
+def test_leak_warning_reaches_the_markdown():
+    md = render_markdown(Trial("run", split_task(generate_art=7),
+                               make_session_result()))
+    assert "**Warning:**" in md and "did not hold" in md
+
+
+def test_phase_energy_uses_gross_when_no_baseline():
+    t = make_task_result(net=None)
+    t.phases = [make_phase("compile", 3000.0, None), make_phase("run", 1000.0, None)]
+    rows = phase_table(t)
+    assert rows[0][2].startswith("3000.0 J")

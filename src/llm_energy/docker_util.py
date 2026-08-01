@@ -168,9 +168,15 @@ class StatsSampler:
 
 
 def run_container(task: TaskSpec, image: ImageSpec, run_dir: Path,
-                  stats_interval_s: float = 2.0) -> ContainerRun:
-    """Run the task container to completion, sampling stats along the way."""
-    name = f"llm-energy-{int(time.time())}"
+                  stats_interval_s: float = 2.0,
+                  command: list[str] | None = None,
+                  timeout_s: int | None = None) -> ContainerRun:
+    """Run one container to completion, sampling stats along the way.
+
+    `command` overrides the task's own for multi-phase tasks; each phase gets
+    a fresh container over the same run directory and appends to one log.
+    """
+    name = f"llm-energy-{int(time.time() * 1000)}"
     cmd = ["docker", "run", "--rm", "--name", name]
     if image.platform:
         cmd += ["--platform", image.platform]
@@ -182,16 +188,20 @@ def run_container(task: TaskSpec, image: ImageSpec, run_dir: Path,
     for k, v in task.env.items():
         cmd += ["-e", f"{k}={v}"]
     cmd.append(image.tag)
-    cmd += task.command
+    phase_command = command if command is not None else task.command
+    cmd += phase_command
 
     sampler = StatsSampler(name, interval_s=stats_interval_s)
     log_path = run_dir / "container.log"
     t0 = time.monotonic()
-    with log_path.open("w") as log:
+    # append: a multi-phase task keeps every phase's output in one log
+    with log_path.open("a") as log:
+        log.write(f"\n===== {' '.join(phase_command)} =====\n")
+        log.flush()
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
         sampler.start()
         try:
-            exit_code = proc.wait(timeout=task.timeout_s)
+            exit_code = proc.wait(timeout=timeout_s or task.timeout_s)
         except subprocess.TimeoutExpired:
             subprocess.run(["docker", "kill", name], capture_output=True)
             proc.wait(timeout=30)

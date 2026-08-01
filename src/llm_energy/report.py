@@ -102,12 +102,35 @@ def local_coordination(sp: SessionPowerResult,
                              task_joules=task_j, notes=notes)
 
 
+def phase_energy_j(p) -> float:
+    """Net if a baseline was applied, else gross — matching Trial.task_energy_j."""
+    return p.net_joules if p.net_joules is not None else p.gross_joules
+
+
+def compilation_leak(task: TaskRunResult) -> str | None:
+    """Warn when compiler output is spread across a phase split.
+
+    A compile/run split is only meaningful if the compiling finished in the
+    compile phase. Several phases writing build artifacts means energy that
+    belongs to one bucket was billed to another.
+    """
+    building = [p.name for p in task.phases if p.build_artifacts_written > 0]
+    if len(building) < 2:
+        return None
+    return (f"compiler output was written in {len(building)} phases "
+            f"({', '.join(building)}) — the compile/run split did not hold, so "
+            "these phase energies are not a clean separation")
+
+
 @dataclass
 class Trial:
     label: str
     task: TaskRunResult
     session: SessionEnergyResult
     session_power: SessionPowerResult | None = None
+
+    def multiphase(self) -> bool:
+        return len(self.task.phases) > 1
 
     def models(self) -> str:
         return ", ".join(m.model for m in self.session.usage.per_model)
@@ -253,6 +276,27 @@ def _trial_rows(t: Trial) -> list[tuple[str, str]]:
     return rows
 
 
+def phase_table(task: TaskRunResult) -> list[list[str]]:
+    """Rows of (phase, wall, energy, share, mean W, compiler output)."""
+    total = sum(phase_energy_j(p) for p in task.phases)
+    rows = []
+    for p in task.phases:
+        e = phase_energy_j(p)
+        rows.append([
+            p.name,
+            f"{p.wall_time_s:.1f} s",
+            f"{e:.1f} J ({_wh(e):.3f} Wh)",
+            f"{100.0 * e / total:.1f}%" if total > 0 else "n/a",
+            f"{p.mean_power_w:.2f} W",
+            str(p.build_artifacts_written),
+        ])
+    return rows
+
+
+PHASE_HEADERS = ["Phase", "Wall", "Energy", "Share", "Mean power",
+                 "Build artifacts"]
+
+
 def render_markdown(trial: Trial) -> str:
     lines = [f"# llm-energy report: {trial.task.task_name}", ""]
     lines.append(f"Machine: {trial.task.machine.chip or trial.task.machine.hostname} "
@@ -261,6 +305,21 @@ def render_markdown(trial: Trial) -> str:
     lines += [f"| {k} | {v} |" for k, v in _trial_rows(trial)]
     if trial.task.outputs.get("lhe_file_nevents"):
         lines.append(f"| LHE events | {trial.task.outputs['lhe_file_nevents']} |")
+
+    if trial.multiphase():
+        lines += ["", "## Task phases", "",
+                  "| " + " | ".join(PHASE_HEADERS) + " |",
+                  "|" + "---|" * len(PHASE_HEADERS)]
+        lines += ["| " + " | ".join(r) + " |" for r in phase_table(trial.task)]
+        basis = ("net of idle baseline"
+                 if trial.task.net_joules is not None else "gross")
+        lines += ["", f"Phase energies are {basis} and sum to the task total. "
+                      "*Build artifacts* counts compiler output (`.o`, `.a`, "
+                      "`.so`, `.mod`) written during each phase — the check "
+                      "that the split held."]
+        leak = compilation_leak(trial.task)
+        if leak:
+            lines += ["", f"**Warning:** {leak}"]
     lines += ["", "## Caveats", ""]
     lines += [f"- {c}" for c in CAVEATS]
     lc = trial.local_coordination()
@@ -341,6 +400,18 @@ def render_terminal(trial: Trial) -> None:
     for k, v in _trial_rows(trial):
         table.add_row(k, v)
     console.print(table)
+
+    if trial.multiphase():
+        ptable = Table(title="Task phases")
+        for col in PHASE_HEADERS:
+            ptable.add_column(col)
+        for r in phase_table(trial.task):
+            ptable.add_row(*r)
+        console.print(ptable)
+        leak = compilation_leak(trial.task)
+        if leak:
+            console.print(f"[yellow]warning: {leak}[/yellow]")
+
     lc = trial.local_coordination()
     fail = trial.power_failure_note()
     if fail:

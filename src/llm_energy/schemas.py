@@ -96,6 +96,27 @@ class BaselineResult:
 
 
 @dataclass
+class PhaseResult:
+    """Energy for one measured step of a multi-phase task."""
+    name: str
+    command: list[str]
+    wall_time_s: float
+    gross_joules: float
+    net_joules: float | None
+    mean_power_w: float
+    alignment_uncertainty_j: float
+    exit_code: int
+    container_cpu_seconds: float | None = None
+    started_at: str = ""
+    ended_at: str = ""
+    # compiler output written during this phase — the check that a
+    # compile/run split actually held
+    build_artifacts_written: int = 0
+    build_artifact_examples: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass
 class TaskRunResult:
     task_name: str
     image: str
@@ -123,6 +144,9 @@ class TaskRunResult:
     coordinating_session_id: str | None = None
     started_at: str = ""
     ended_at: str = ""
+    # per-phase breakdown; single-phase tasks carry one entry named "run", so
+    # the top-level totals always equal the sum over phases
+    phases: list[PhaseResult] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
     tool_version: str = __version__
     created_at: str = field(default_factory=now_iso)
@@ -256,6 +280,7 @@ def load_baseline(path: Path) -> BaselineResult:
 def load_task_result(path: Path) -> TaskRunResult:
     data = json.loads(path.read_text())
     data["machine"] = _from_dict(MachineInfo, data.get("machine", {}))
+    data["phases"] = [_from_dict(PhaseResult, p) for p in data.get("phases", [])]
     return _from_dict(TaskRunResult, data)
 
 

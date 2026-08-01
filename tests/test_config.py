@@ -52,3 +52,101 @@ def test_relative_mount_target_rejected(tmp_path):
         "  - {source: cards, target: relative/path}\n")
     with pytest.raises(ValueError, match="absolute"):
         load_task(d)
+
+
+# --- phases ------------------------------------------------------------------
+
+BASE = """
+schema_version: 1
+name: t
+images:
+  native: {build: {context: .}, tag: img:1}
+default_image: native
+"""
+
+
+def write_task(tmp_path, body):
+    (tmp_path / "task.yaml").write_text(BASE + body)
+    return tmp_path
+
+
+def test_single_command_becomes_one_phase(tmp_path):
+    task = load_task(write_task(tmp_path, 'command: ["a", "b"]\n'))
+    assert [p.name for p in task.phases] == ["run"]
+    assert task.phases[0].command == ["a", "b"]
+    assert task.command == ["a", "b"]
+    assert not task.multiphase
+
+
+def test_phases_are_parsed_in_order(tmp_path):
+    task = load_task(write_task(tmp_path, """
+phases:
+  - {name: compile, command: ["make"], description: build, timeout_s: 60}
+  - {name: run, command: ["go"]}
+"""))
+    assert [p.name for p in task.phases] == ["compile", "run"]
+    assert task.phases[0].description == "build"
+    assert task.phases[0].timeout_s == 60
+    assert task.phases[1].timeout_s is None      # falls back to the task's
+    assert task.multiphase
+
+
+def test_command_property_refuses_to_guess_for_multiphase(tmp_path):
+    task = load_task(write_task(tmp_path, """
+phases:
+  - {name: a, command: ["x"]}
+  - {name: b, command: ["y"]}
+"""))
+    with pytest.raises(ValueError, match="use task.phases"):
+        task.command
+
+
+def test_command_and_phases_together_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="exactly one of"):
+        load_task(write_task(tmp_path, 'command: ["a"]\nphases: [{name: p, command: ["b"]}]\n'))
+
+
+def test_neither_command_nor_phases_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="exactly one of"):
+        load_task(write_task(tmp_path, "workdir: /work\n"))
+
+
+def test_duplicate_phase_names_are_rejected(tmp_path):
+    with pytest.raises(ValueError, match="unique"):
+        load_task(write_task(tmp_path, """
+phases:
+  - {name: same, command: ["x"]}
+  - {name: same, command: ["y"]}
+"""))
+
+
+def test_phase_missing_command_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="needs 'name' and 'command'"):
+        load_task(write_task(tmp_path, 'phases: [{name: p}]\n'))
+
+
+def test_empty_phase_list_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="non-empty"):
+        load_task(write_task(tmp_path, "phases: []\n"))
+
+
+def test_split_task_matches_the_single_phase_task_physics():
+    single = find_task("madgraph-ttbar-lhe", REPO / "tasks")
+    split = find_task("madgraph-ttbar-split", REPO / "tasks")
+    keys = ("process", "order", "ebeam1_gev", "ebeam2_gev", "nevents", "iseed")
+    assert {k: single.metadata[k] for k in keys} == {k: split.metadata[k] for k in keys}
+    # both build the same image, from the one Dockerfile
+    assert single.image().tag == split.image().tag
+    assert (split.image().build_context / "Dockerfile").exists()
+    # the run card the launch phase uses pins the same physics
+    launch = (split.task_dir / "cards" / "ttbar_launch.mg5").read_text()
+    for line in ("set nevents 10000", "set ebeam1 6800.0", "set iseed 42"):
+        assert line in launch
+    codegen = (split.task_dir / "cards" / "ttbar_codegen.mg5").read_text()
+    assert "generate p p > t t~" in codegen
+    # comments may discuss launch; no MG5 *command* in this card may be one,
+    # or event generation would leak into the compile phase
+    commands = [ln.strip() for ln in codegen.splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+    assert not any(c.startswith("launch") for c in commands), commands
+    assert commands[-1].startswith("output ")

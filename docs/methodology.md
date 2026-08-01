@@ -115,9 +115,51 @@ periodic `docker stats` snapshots as diagnostics.
 - The image warms up MG5's one-time setup at build time (a trivial
   `e+ e- > mu+ mu-` run), so measured runs exclude first-use tool setup. The
   ttbar process's own code generation and Fortran compilation stay **inside**
-  the measured run: they are part of performing the task. A variant with a
-  pre-generated process directory would isolate pure event generation and is
-  an easy follow-up if wanted.
+  the measured run: they are part of performing the task. The
+  `madgraph-ttbar-split` task measures them separately — see below.
+
+## Splitting compilation from execution
+
+`madgraph-ttbar-lhe` bills one number for work of two very different kinds:
+`launch` compiles the generated Fortran and *then* generates events. The
+`madgraph-ttbar-split` task runs the same physics — same process, beams,
+event count, and seed — as two separately measured phases:
+
+| Phase | Contents |
+|---|---|
+| `codegen-compile` | `generate` + `output` write the process directory as Fortran, then `make` builds it |
+| `event-generation` | `launch` on the pre-built directory |
+
+### Mechanics
+
+Each phase runs in its own container over a shared run directory, so phase 2
+consumes phase 1's build. All phases are sampled by **one** power trace, with
+each phase's energy integrated over its own container window — the same
+carve-out used for the single-phase task, so phases and tasks stay directly
+comparable. Task totals are the sum over phases by construction.
+
+Forcing the compile into phase 1 requires driving `make` explicitly, because
+`launch` would otherwise do it. The compile phase ends with an `ls` of the
+expected `madevent` executables so a wrong make target fails loudly there
+rather than silently pushing compilation into phase 2.
+
+### Verifying the split rather than assuming it
+
+A phase split is only meaningful if the compiling actually finished in the
+compile phase. Every phase therefore counts the compiler output (`.o`, `.a`,
+`.so`, `.mod`) written inside its own window, recorded as
+`build_artifacts_written`. A clean split shows a large count in
+`codegen-compile` and **zero** in `event-generation`; artifacts in more than
+one phase are reported as a warning on the run, because the phase energies
+are then not a clean separation.
+
+### What the split does not claim
+
+Event identity between `madgraph-ttbar-split` and `madgraph-ttbar-lhe` is an
+empirical question, not an assumption: the same seed drives the same
+generator, but the two reach madevent by different routes. Check it with
+`llm-energy verify-events` rather than relying on it. The single-phase task is
+unchanged, so results already collected under it remain comparable.
 - MG5 version is pinned; the scailfin variant ships MG5 3.5.1, so event
   identity across image variants is *not* expected — only within a variant.
 

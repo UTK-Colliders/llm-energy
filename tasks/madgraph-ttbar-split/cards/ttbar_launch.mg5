@@ -1,0 +1,20 @@
+# Phase 2 of madgraph-ttbar-split: event generation from the pre-built
+# process directory produced by phase 1.
+#
+# The run-card values below are identical to tasks/madgraph-ttbar-lhe's, seed
+# included, so the two tasks are generating the same physics; only where the
+# measurement boundary falls differs. Whether the events come out
+# byte-identical across the two is an empirical question — check it with
+# `llm-energy verify-events`, don't assume it.
+#
+# Prompt flow: the first `done` dismisses the shower/detector/madspin switch
+# menu after `launch` (all off at LO); the `set` lines then edit run_card at
+# the edit-cards prompt; the final `done` starts madevent.
+set automatic_html_opening False
+launch /work/proc_pp_ttbar
+done
+set nevents 10000
+set ebeam1 6800.0
+set ebeam2 6800.0
+set iseed 42
+done

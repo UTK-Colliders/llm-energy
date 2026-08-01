@@ -254,6 +254,59 @@ This matters more than it sounds. `--latest` sorts every transcript on the
 machine by mtime: run it from a second Claude session and you measure that
 session instead, silently. Prefer `--for-task` whenever a task result exists.
 
+## Separating compilation from execution
+
+`madgraph-ttbar-lhe` measures one number for two different kinds of work: MG5's
+`launch` compiles the generated Fortran and *then* generates events.
+`madgraph-ttbar-split` runs the same physics — same process, beams, event
+count, and seed — as two separately measured phases:
+
+```sh
+uv run llm-energy run-task madgraph-ttbar-split
+```
+
+```
+  codegen-compile: 3100.0 J (77.5%) over 380.0 s, mean 8.16 W, 142 build artifacts
+  event-generation: 900.0 J (22.5%) over 220.0 s, mean 4.09 W, 0 build artifacts
+gross 4000.0 J, net 3800.0 J over 600.0 s (mean 6.67 W) -> results/task-...json
+```
+
+Each phase runs in its own container over a shared run directory, all under one
+power trace, with each phase's energy integrated over its own window. Task
+totals are the sum over phases, so `report` and `compare` work unchanged and
+gain a per-phase table.
+
+**The split is verified, not assumed.** Every phase counts the compiler output
+(`.o`, `.a`, `.so`, `.mod`) written inside its own window. A clean split shows
+a large count in `codegen-compile` and **zero** in `event-generation`; if
+artifacts appear in both, the run is flagged, because compilation leaking into
+the generation window would move energy between the two buckets:
+
+```
+warning: compiler output was written in 2 phases (codegen-compile,
+event-generation) — the compile/run split did not hold
+```
+
+Whether the split task produces byte-identical events to the single-phase one
+is an empirical question — check it with `verify-events` rather than assuming
+it. `madgraph-ttbar-lhe` is untouched, so existing results stay comparable.
+
+### Adding phases to your own task
+
+Any `task.yaml` can use `phases:` instead of `command:`:
+
+```yaml
+phases:
+  - name: codegen-compile
+    description: matrix-element code generation and Fortran compilation
+    command: ["bash", "-euc", "mg5_aMC /cards/codegen.mg5 && cd ... && make"]
+  - name: event-generation
+    command: ["mg5_aMC", "/cards/launch.mg5"]
+```
+
+Phases share the run directory and run in order; a failed phase skips the rest.
+`command:` remains valid and is reported as a single phase named `run`.
+
 ## Comparing LLM models
 
 One run per model — same brief, same pinned physics, different coordinator:

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from llm_energy import docker_util, machine_info
+from llm_energy.build_artifacts import count_build_artifacts
 from llm_energy.config import TaskSpec
-from llm_energy.schemas import BaselineResult, TaskRunResult, now_iso
+from llm_energy.schemas import (BaselineResult, PhaseResult, TaskRunResult,
+                                now_iso)
 from llm_energy.session.locate import current_session_id
 
 
@@ -47,10 +50,22 @@ def run_task(task: TaskSpec,
 
     interval_s = interval_ms / 1000.0
     backend_start_mono = time.monotonic()
+    # One sampler spanning every phase; each phase's window is carved out of
+    # the same trace, so phases stay directly comparable and the sampler is
+    # started once no matter how many phases there are.
     backend.start(interval_ms, raw_path)
+    runs: list[tuple] = []
     try:
         sleep_fn(2 * interval_s)
-        run = docker_util.run_container(task, image, run_dir)
+        for phase in task.phases:
+            p_start_wall = datetime.now(timezone.utc)
+            run = docker_util.run_container(task, image, run_dir,
+                                            command=phase.command,
+                                            timeout_s=phase.timeout_s)
+            p_end_wall = datetime.now(timezone.utc)
+            runs.append((phase, run, p_start_wall, p_end_wall))
+            if run.exit_code != 0:
+                break       # later phases depend on this one; don't run them
         sleep_fn(1 * interval_s)
     except BaseException:
         # Don't leave the sampler running: on macOS that is a root
@@ -62,18 +77,47 @@ def run_task(task: TaskSpec,
         raise
     trace = backend.stop()
 
-    # Trace-relative window of the container run. t_rel 0 ≈ backend start;
-    # residual skew is ≤ ~1 sample interval and reported as uncertainty.
-    w_start = run.t0_monotonic - backend_start_mono
-    w_end = run.t1_monotonic - backend_start_mono
-    gross_j = trace.integrate_joules(t_start=w_start, t_end=w_end)
-    mean_w = gross_j / run.wall_time_s if run.wall_time_s > 0 else 0.0
+    def window_energy(r) -> tuple[float, float, float | None]:
+        """(gross, mean W, net) over a container run's slice of the trace.
+
+        t_rel 0 ≈ backend start; residual skew is ≤ ~1 sample interval and is
+        reported as alignment uncertainty.
+        """
+        gross = trace.integrate_joules(t_start=r.t0_monotonic - backend_start_mono,
+                                       t_end=r.t1_monotonic - backend_start_mono)
+        mean = gross / r.wall_time_s if r.wall_time_s > 0 else 0.0
+        net = (gross - baseline.mean_w * r.wall_time_s
+               if baseline is not None else None)
+        return gross, mean, net
+
+    phase_results: list[PhaseResult] = []
+    for phase, r, p_start, p_end in runs:
+        p_gross, p_mean, p_net = window_energy(r)
+        build = count_build_artifacts(run_dir, p_start, p_end)
+        phase_results.append(PhaseResult(
+            name=phase.name, command=list(phase.command),
+            wall_time_s=r.wall_time_s, gross_joules=p_gross, net_joules=p_net,
+            mean_power_w=p_mean, alignment_uncertainty_j=p_mean * interval_s,
+            exit_code=r.exit_code, container_cpu_seconds=r.cpu_seconds,
+            started_at=p_start.isoformat(), ended_at=p_end.isoformat(),
+            build_artifacts_written=build.count,
+            build_artifact_examples=build.examples,
+            description=phase.description))
+
+    # Totals are the sum over phases, so a single-phase task is unchanged and
+    # a multi-phase one stays consistent with its own breakdown.
+    run = runs[-1][1]
+    wall_time_s = sum(p.wall_time_s for p in phase_results)
+    gross_j = sum(p.gross_joules for p in phase_results)
+    mean_w = gross_j / wall_time_s if wall_time_s > 0 else 0.0
+    cpu_seconds = [p.container_cpu_seconds for p in phase_results
+                   if p.container_cpu_seconds is not None]
 
     net_j = None
     baseline_mean_w = None
     if baseline is not None:
         baseline_mean_w = baseline.mean_w
-        net_j = gross_j - baseline.mean_w * run.wall_time_s
+        net_j = gross_j - baseline.mean_w * wall_time_s
 
     outputs: dict = {"container_log": str(run_dir / "container.log"),
                      "stdout_tail": run.stdout_tail if run.exit_code != 0 else ""}
@@ -101,7 +145,7 @@ def run_task(task: TaskSpec,
         image=image.tag,
         image_arch=docker_util.image_arch(image.tag),
         emulated=emulated,
-        wall_time_s=run.wall_time_s,
+        wall_time_s=wall_time_s,
         gross_joules=gross_j,
         baseline_ref=baseline_ref,
         baseline_mean_w=baseline_mean_w,
@@ -109,7 +153,7 @@ def run_task(task: TaskSpec,
         mean_power_w=mean_w,
         alignment_uncertainty_j=mean_w * interval_s,
         backend=trace.backend,
-        container_cpu_seconds=run.cpu_seconds,
+        container_cpu_seconds=sum(cpu_seconds) if cpu_seconds else None,
         docker_stats_samples=run.stats_samples,
         exit_code=run.exit_code,
         outputs=outputs,
@@ -119,10 +163,12 @@ def run_task(task: TaskSpec,
         coordinating_session_id=coordinating_session_id,
         started_at=started_at,
         ended_at=now_iso(),
+        phases=phase_results,
     )
     if run.exit_code != 0:
+        failed = phase_results[-1].name
         raise TaskRunError(
-            f"task exited with code {run.exit_code}; see {run_dir}/container.log. "
-            f"(partial result not written — energy for a failed task is not "
-            f"comparable)")
+            f"task phase '{failed}' exited with code {run.exit_code}; see "
+            f"{run_dir}/container.log. (partial result not written — energy "
+            f"for a failed task is not comparable)")
     return result

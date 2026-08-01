@@ -205,6 +205,19 @@ def run_task_cmd(task_name: str, task_dir: Path, baseline_arg: str,
         raise click.ClickException(str(e))
 
     path = write_result(result, out / f"task-{task_name}-{_ts()}.json")
+    if len(result.phases) > 1:
+        from llm_energy.report import compilation_leak, phase_energy_j
+
+        total = sum(phase_energy_j(p) for p in result.phases)
+        for p in result.phases:
+            e = phase_energy_j(p)
+            share = f"{100.0 * e / total:.1f}%" if total > 0 else "n/a"
+            console.print(f"  {p.name}: {e:.1f} J ({share}) over "
+                          f"{p.wall_time_s:.1f} s, mean {p.mean_power_w:.2f} W, "
+                          f"{p.build_artifacts_written} build artifacts")
+        leak = compilation_leak(result)
+        if leak:
+            console.print(f"[yellow]warning: {leak}[/yellow]")
     net = f", net {result.net_joules:.1f} J" if result.net_joules is not None else ""
     console.print(f"gross {result.gross_joules:.1f} J{net} over "
                   f"{result.wall_time_s:.1f} s "
