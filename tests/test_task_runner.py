@@ -115,6 +115,22 @@ def test_expected_output_recorded_with_lhe_fingerprint(patched, monkeypatch, tmp
     assert len(res.outputs["lhe_file_events_sha256"]) == 64
 
 
+def test_coordinating_session_is_stamped_from_the_environment(
+        patched, monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-1234")
+    res = tr.run_task(make_task(tmp_path), CannedBackend(10.0, 10), tmp_path,
+                      interval_ms=1000, sleep_fn=lambda s: None)
+    assert res.coordinating_session_id == "sess-1234"
+    assert res.started_at and res.ended_at
+
+
+def test_no_session_id_outside_a_claude_session(patched, monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    res = tr.run_task(make_task(tmp_path), CannedBackend(10.0, 10), tmp_path,
+                      interval_ms=1000, sleep_fn=lambda s: None)
+    assert res.coordinating_session_id is None
+
+
 def test_missing_expected_output_flagged(patched, tmp_path):
     exp = ExpectedOutput(glob="out/never.lhe", record_as="lhe_file")
     res = tr.run_task(make_task(tmp_path, expect=[exp]), CannedBackend(10.0, 10),

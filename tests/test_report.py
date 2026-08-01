@@ -2,15 +2,19 @@ from pathlib import Path
 
 import pytest
 
-from llm_energy.report import (Trial, check_event_identity,
+from llm_energy.report import (Trial, check_event_identity, local_coordination,
                                render_comparison_markdown, render_markdown)
 from llm_energy.schemas import (EnergyBand, MachineInfo, ModelUsage,
-                                SessionEnergyResult, SessionUsage,
-                                TaskRunResult)
+                                SessionEnergyResult, SessionPowerResult,
+                                SessionUsage, TaskRunResult)
+
+# a task run nested inside the session window used by make_session_power
+TASK_START, TASK_END = "2026-08-01T10:05:00+00:00", "2026-08-01T10:15:00+00:00"
 
 
 def make_task_result(events_hash="a" * 64, nevents=10000, lhe_path="",
-                     net=500.0) -> TaskRunResult:
+                     net=500.0, backend="powermetrics", gross=9000.0,
+                     started_at=TASK_START, ended_at=TASK_END) -> TaskRunResult:
     outputs = {}
     if events_hash:
         outputs = {"lhe_file": lhe_path, "lhe_file_nevents": nevents,
@@ -18,10 +22,24 @@ def make_task_result(events_hash="a" * 64, nevents=10000, lhe_path="",
     return TaskRunResult(
         task_name="madgraph-ttbar-lhe", image="llm-energy/mg5amc:test",
         image_arch="arm64", emulated=False, wall_time_s=600.0,
-        gross_joules=9000.0, baseline_ref="b.json", baseline_mean_w=4.0,
+        gross_joules=gross, baseline_ref="b.json", baseline_mean_w=4.0,
         net_joules=net, mean_power_w=15.0, alignment_uncertainty_j=15.0,
-        backend="powermetrics", container_cpu_seconds=2300.0,
+        backend=backend, container_cpu_seconds=2300.0,
         outputs=outputs, machine=MachineInfo(chip="Apple M2"),
+        started_at=started_at, ended_at=ended_at,
+    )
+
+
+def make_session_power(net=3000.0, gross=12000.0, backend="powermetrics",
+                       started_at="2026-08-01T10:00:00+00:00",
+                       ended_at="2026-08-01T10:30:00+00:00") -> SessionPowerResult:
+    return SessionPowerResult(
+        command=["claude", "-p", "do the job"], wall_time_s=1800.0,
+        gross_joules=gross, baseline_ref="b.json",
+        baseline_mean_w=4.0 if net is not None else None,
+        net_joules=net, mean_power_w=6.7, alignment_uncertainty_j=6.7,
+        backend=backend, exit_code=0, started_at=started_at, ended_at=ended_at,
+        session_ids=["abc123"], machine=MachineInfo(chip="Apple M2"),
     )
 
 
@@ -78,6 +96,89 @@ def test_event_identity_unchecked_when_missing():
               Trial("b", make_task_result(), make_session_result())]
     identity = check_event_identity(trials)
     assert not identity.checked
+
+
+def test_local_coordination_subtracts_the_nested_task_run():
+    lc = local_coordination(make_session_power(net=3000.0),
+                            make_task_result(net=500.0))
+    assert lc.joules == pytest.approx(2500.0)
+    assert lc.basis == "net of idle baseline"
+    assert lc.notes == []
+
+
+def test_local_coordination_falls_back_to_gross_without_baselines():
+    lc = local_coordination(make_session_power(net=None, gross=12000.0),
+                            make_task_result(net=None, gross=9000.0))
+    assert lc.joules == pytest.approx(3000.0)
+    assert lc.basis == "gross"
+    assert lc.notes == []
+
+
+def test_mixed_baselines_use_gross_and_say_so():
+    lc = local_coordination(make_session_power(net=3000.0, gross=12000.0),
+                            make_task_result(net=None, gross=9000.0))
+    assert lc.joules == pytest.approx(3000.0)
+    assert lc.basis == "gross"
+    assert any("only one of the two runs had a baseline" in n for n in lc.notes)
+
+
+def test_task_outside_the_session_window_is_flagged():
+    lc = local_coordination(
+        make_session_power(),
+        make_task_result(started_at="2026-08-01T09:00:00+00:00",
+                         ended_at="2026-08-01T09:30:00+00:00"))
+    assert any("does not lie inside the measured session window" in n
+               for n in lc.notes)
+
+
+def test_unknown_task_window_is_flagged():
+    lc = local_coordination(make_session_power(),
+                            make_task_result(started_at="", ended_at=""))
+    assert any("could not be verified" in n for n in lc.notes)
+
+
+def test_backend_mismatch_is_flagged():
+    lc = local_coordination(make_session_power(backend="powermetrics"),
+                            make_task_result(backend="tdp-model"))
+    assert any("not directly comparable" in n for n in lc.notes)
+
+
+def test_negative_local_coordination_is_flagged():
+    lc = local_coordination(make_session_power(net=100.0),
+                            make_task_result(net=500.0))
+    assert lc.joules == pytest.approx(-400.0)
+    assert any("negative after subtraction" in n for n in lc.notes)
+
+
+def test_total_coordination_band_adds_measured_local_to_estimated_llm():
+    t = Trial("run", make_task_result(net=500.0), make_session_result(2000.0),
+              session_power=make_session_power(net=3000.0))
+    band = t.total_coordination_band()
+    assert band.central_j == pytest.approx(2000.0 + 2500.0)
+    assert band.low_j == pytest.approx(500.0 + 2500.0)
+    assert band.high_j == pytest.approx(8000.0 + 2500.0)
+
+
+def test_trial_without_session_power_has_no_local_terms():
+    t = Trial("run", make_task_result(), make_session_result())
+    assert t.local_coordination() is None
+    assert t.total_coordination_band() is None
+    assert "E_coord,local" not in render_markdown(t)
+
+
+def test_report_markdown_includes_local_coordination():
+    t = Trial("run", make_task_result(net=500.0), make_session_result(2000.0),
+              session_power=make_session_power(net=3000.0))
+    md = render_markdown(t)
+    assert "E_coord,local" in md
+    assert "E_coord,total" in md
+    assert "measured on the same instrument as E_task" in md
+
+
+def test_report_markdown_surfaces_local_coordination_warnings():
+    t = Trial("run", make_task_result(backend="tdp-model"),
+              make_session_result(), session_power=make_session_power())
+    assert "not directly comparable" in render_markdown(t)
 
 
 def test_comparison_markdown():

@@ -251,7 +251,9 @@ def measure_session_cmd(command: tuple[str, ...], baseline_arg: str,
                              baseline_ref=base_ref, interval_ms=interval_ms,
                              cwd=cwd)
 
-    path = write_result(result, out / f"session-power-{_ts()}.json")
+    # prefix deliberately not "session-": that glob belongs to analyze-session's
+    # energy results, and scripts pick those up with `results/session-*.json`
+    path = write_result(result, out / f"power-session-{_ts()}.json")
     net = f", net {result.net_joules:.1f} J" if result.net_joules is not None else ""
     console.print(f"session gross {result.gross_joules:.1f} J{net} over "
                   f"{result.wall_time_s:.0f} s "
@@ -310,10 +312,14 @@ def list_sessions(cwd: Path | None, since: str | None, all_projects: bool):
               help="explicit transcript JSONL path(s), bypassing lookup")
 @click.option("--out", type=click.Path(path_type=Path), default=DEFAULT_RESULTS,
               show_default=True)
+@click.option("--out-file", "out_file", type=click.Path(path_type=Path),
+              default=None,
+              help="write the result to exactly this path (for scripts)")
 def analyze_session(session_ids: tuple[str, ...], latest: bool,
                     for_task: Path | None, for_session_power: Path | None,
                     cwd: Path | None, coefficients: Path,
-                    transcripts: tuple[Path, ...], out: Path):
+                    transcripts: tuple[Path, ...], out: Path,
+                    out_file: Path | None):
     """Sum a session's tokens and estimate its energy band."""
     from llm_energy.schemas import (load_session_power, load_task_result,
                                     write_result)
@@ -382,7 +388,7 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool,
     result = energy_band(usage, coeffs)
 
     short = (usage.session_ids[0][:8] if usage.session_ids else "manual")
-    path = write_result(result, out / f"session-{short}-{_ts()}.json")
+    path = write_result(result, out_file or out / f"session-{short}-{_ts()}.json")
     b = result.total_band
     for m in usage.per_model:
         console.print(f"  {m.model}: in={m.input_tokens:,} out={m.output_tokens:,} "
@@ -392,6 +398,40 @@ def analyze_session(session_ids: tuple[str, ...], latest: bool,
                   f"(low/central/high, PUE {result.pue}) -> {path}")
     for n in result.notes:
         console.print(f"[dim]note: {n}[/dim]")
+
+
+@main.command("find-task-result")
+@click.argument("session_power", type=click.Path(path_type=Path, exists=True))
+@click.option("--out", type=click.Path(path_type=Path), default=DEFAULT_RESULTS,
+              show_default=True, help="results directory to search")
+@click.option("--all", "show_all", is_flag=True,
+              help="print every match rather than failing on more than one")
+def find_task_result(session_power: Path, out: Path, show_all: bool):
+    """Print the task result coordinated by a measure-session run.
+
+    Matches on the session id stamped into the task result, so it is exact
+    even when results/ holds many runs.
+    """
+    from llm_energy.pairing import find_task_results_for_sessions
+    from llm_energy.schemas import load_session_power
+
+    sp = load_session_power(session_power)
+    if not sp.session_ids:
+        raise click.ClickException(
+            f"{session_power} links no sessions — nothing to match against")
+    matches = find_task_results_for_sessions(out, sp.session_ids)
+    if not matches:
+        raise click.ClickException(
+            f"no task result in {out} was coordinated by session(s) "
+            f"{', '.join(s[:8] for s in sp.session_ids)} — did the agent "
+            "actually run `llm-energy run-task`?")
+    if len(matches) > 1 and not show_all:
+        raise click.ClickException(
+            f"{len(matches)} task results match this session: "
+            + ", ".join(str(m) for m in matches)
+            + " — pass --all, or pick one explicitly")
+    for m in matches:
+        click.echo(str(m))
 
 
 # --- report / compare / verify-events ----------------------------------------

@@ -1,0 +1,111 @@
+"""Session-window power measurement: arithmetic and session attribution."""
+
+from pathlib import Path
+
+import pytest
+
+import llm_energy.session_power as sp
+from llm_energy.schemas import (BaselineResult, MachineInfo, PowerSample,
+                                PowerTrace)
+from llm_energy.session.locate import SessionFileInfo
+
+
+class CannedBackend:
+    """Emits 1 s samples at a fixed power; t_rel 0 == start() call."""
+
+    def __init__(self, watts: float, n: int):
+        self.trace = PowerTrace(backend="canned", samples=[
+            PowerSample(t_rel_s=float(i), elapsed_s=1.0, combined_mw=watts * 1000)
+            for i in range(n)
+        ])
+        self.started_with = None
+
+    def start(self, interval_ms, raw_path):
+        self.started_with = interval_ms
+        Path(raw_path).write_text("canned")
+
+    def stop(self):
+        return self.trace
+
+
+def session_info(session_id="s1"):
+    from datetime import datetime, timezone
+    return SessionFileInfo(
+        path=Path(f"/tmp/{session_id}.jsonl"), session_id=session_id,
+        mtime=datetime(2026, 8, 1, tzinfo=timezone.utc), size_bytes=10)
+
+
+@pytest.fixture
+def patched(monkeypatch):
+    """Child 'runs' from t=2 s to t=6 s after the backend starts."""
+    clock = iter([1000.0, 1002.0, 1006.0])
+    monkeypatch.setattr(sp.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(sp.machine_info, "collect", lambda: MachineInfo(chip="test"))
+    monkeypatch.setattr(sp, "find_sessions_started_in_window",
+                        lambda *a, **k: [session_info()])
+
+
+def run(backend, tmp_path, baseline=None, run_fn=None, command=("claude",)):
+    return sp.measure_session(
+        list(command), backend, tmp_path, baseline=baseline,
+        baseline_ref="b.json" if baseline else None, interval_ms=1000,
+        cwd=tmp_path, sleep_fn=lambda s: None,
+        run_fn=run_fn or (lambda cmd, cwd: 0))
+
+
+def test_energy_window_and_net(patched, tmp_path):
+    baseline = BaselineResult(
+        duration_s=60, mean_w=4.0, std_w=0.1, joules=240, n_samples=60,
+        min_w=3.9, max_w=4.2, backend="canned", docker_running=True,
+        machine=MachineInfo(chip="test"))
+
+    res = run(CannedBackend(10.0, 10), tmp_path, baseline=baseline)
+
+    # 10 W over the child's [2, 6] s window
+    assert res.gross_joules == pytest.approx(40.0)
+    assert res.wall_time_s == pytest.approx(4.0)
+    assert res.mean_power_w == pytest.approx(10.0)
+    # net = 40 - 4 W * 4 s
+    assert res.net_joules == pytest.approx(24.0)
+    assert res.alignment_uncertainty_j == pytest.approx(10.0)
+    assert res.backend == "canned"
+
+
+def test_no_baseline_means_no_net(patched, tmp_path):
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.net_joules is None
+    assert res.baseline_mean_w is None
+
+
+def test_child_exit_code_and_command_recorded(patched, tmp_path):
+    res = run(CannedBackend(10.0, 10), tmp_path, run_fn=lambda cmd, cwd: 3,
+              command=("claude", "-p", "do the job"))
+    assert res.exit_code == 3
+    assert res.command == ["claude", "-p", "do the job"]
+
+
+def test_sessions_started_in_window_are_linked(patched, tmp_path):
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.session_ids == ["s1"]
+    assert res.notes == []
+    assert res.started_at and res.ended_at
+
+
+def test_no_linked_session_is_flagged(patched, monkeypatch, tmp_path):
+    monkeypatch.setattr(sp, "find_sessions_started_in_window", lambda *a, **k: [])
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.session_ids == []
+    assert any("no Claude Code session started" in n for n in res.notes)
+
+
+def test_multiple_linked_sessions_are_flagged_and_kept(patched, monkeypatch, tmp_path):
+    monkeypatch.setattr(sp, "find_sessions_started_in_window",
+                        lambda *a, **k: [session_info("s1"), session_info("s2")])
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.session_ids == ["s1", "s2"]
+    assert any("2 sessions started" in n for n in res.notes)
+
+
+def test_raw_trace_is_kept(patched, tmp_path):
+    res = run(CannedBackend(10.0, 10), tmp_path)
+    assert res.power_trace_file and Path(res.power_trace_file).exists()
