@@ -528,6 +528,68 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
         raise SystemExit(1)
 
 
+@main.command("compare-deliverables")
+@click.option("--run", "runs", multiple=True, required=True, nargs=2,
+              metavar="LABEL WORKSPACE",
+              help="repeat for each run being compared")
+@click.option("--task", "task_name", default="madgraph-ttbar-open",
+              show_default=True)
+@click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
+              show_default=True)
+def compare_deliverables(runs: tuple[tuple[str, str], ...], task_name: str,
+                         task_dir: Path):
+    """Check whether open runs produced the same physics.
+
+    With every stochastic stage seeded, the event samples must match exactly.
+    The histograms need not: two agents that reconstruct the top differently
+    get different histograms from identical events, which is the method
+    varying rather than a reproducibility failure.
+    """
+    from rich.table import Table
+
+    from llm_energy.deliverable import (compare_graded, grade_workspace,
+                                        load_open_spec)
+
+    if len(runs) < 2:
+        raise click.ClickException("need at least two --run entries to compare")
+    spec = load_open_spec(task_dir / task_name)
+    graded = [(label, grade_workspace(spec, Path(ws))) for label, ws in runs]
+    comp = compare_graded(graded)
+
+    table = Table(title="open-run deliverables")
+    table.add_column("Quantity")
+    for label in comp.labels:
+        table.add_column(label)
+    table.add_row("generator version",
+                  *[v or "unknown" for v in comp.generator_versions])
+    table.add_row("event hash", *[h[:12] or "n/a" for h in comp.event_hashes])
+    table.add_row("histogram hash",
+                  *[h[:12] or "n/a" for h in comp.histogram_hashes])
+    table.add_row("peak (GeV)",
+                  *[f"{p:.1f}" if p is not None else "n/a" for p in comp.peaks_gev])
+    console.print(table)
+
+    if comp.events_identical:
+        console.print("[green]events IDENTICAL[/green] — the pinned seeds held")
+    else:
+        console.print("[red]events DIFFER[/red] — at a fixed seed they should not")
+    if comp.histograms_identical and comp.events_identical:
+        console.print("[green]histograms identical[/green] — same reconstruction "
+                      "as well as same events")
+    elif comp.histograms_identical:
+        # Different events cannot normally give the same histogram; the usual
+        # cause is a histogram left over from an earlier run.
+        console.print("[yellow]histograms identical despite differing events[/yellow]"
+                      " — check the histogram was regenerated, not reused")
+    else:
+        console.print("[dim]histograms differ — expected when the "
+                      "reconstruction methods differ[/dim]")
+    for n in comp.notes:
+        console.print(f"[yellow]note: {n}[/yellow]")
+    if not comp.events_identical:
+        raise SystemExit(1)
+
+
 @main.command("breakdown")
 @click.option("--label", default="run", show_default=True)
 @click.option("--task", "task_result", default=None,

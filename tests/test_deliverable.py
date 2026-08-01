@@ -278,3 +278,105 @@ def test_a_sparse_histogram_reports_prominence_readably(tmp_path):
     prom = [c for c in r.checks if c.name == "peak prominence"][0]
     assert prom.ok and "inf" not in prom.detail
     assert "sparse" in prom.detail
+
+
+# --- exact comparison across runs ---------------------------------------------
+
+from llm_energy.deliverable import (compare_graded,  # noqa: E402
+                                    histogram_fingerprint)
+from llm_energy.lhe import read_generator_version  # noqa: E402
+
+
+def test_histogram_fingerprint_ignores_formatting_but_not_values():
+    assert histogram_fingerprint([1.0, 2.0, 3.0], [4, 5]) == \
+           histogram_fingerprint([1, 2, 3], [4.0, 5.0])
+    assert histogram_fingerprint([1.0, 2.0, 3.0], [4, 5]) != \
+           histogram_fingerprint([1.0, 2.0, 3.0], [4, 6])
+
+
+def test_generator_version_read_from_the_mg5_banner(tmp_path):
+    p = tmp_path / "e.lhe"
+    p.write_text("<LesHouchesEvents>\n<header>\n<MGVersion>\n3.5.16\n"
+                 "</MGVersion>\n</header>\n<init>\n" + INIT + "\n</init>\n"
+                 + event() + "\n</LesHouchesEvents>\n")
+    assert read_generator_version(p) == "3.5.16"
+
+
+def test_generator_version_read_from_an_inline_tag(tmp_path):
+    p = tmp_path / "e.lhe"
+    p.write_text("<LesHouchesEvents>\n<MGVersion>3.6.1</MGVersion>\n<init>\n"
+                 + INIT + "\n</init>\n" + event() + "\n</LesHouchesEvents>\n")
+    assert read_generator_version(p) == "3.6.1"
+
+
+def test_generator_version_absent_is_none(tmp_path):
+    assert read_generator_version(write_lhe(tmp_path / "e.lhe")) is None
+
+
+def graded_run(tmp_path, name, n_events=3, peak=172.5, version=None):
+    d = tmp_path / name
+    d.mkdir()
+    if version:
+        (d / "unweighted_events.lhe.gz").write_bytes(b"")   # replaced below
+        import gzip
+        with gzip.open(d / "unweighted_events.lhe.gz", "wt") as fh:
+            fh.write("<LesHouchesEvents>\n<MGVersion>%s</MGVersion>\n<init>\n%s\n"
+                     "</init>\n%s\n</LesHouchesEvents>\n"
+                     % (version, INIT, "\n".join(event() for _ in range(n_events))))
+    else:
+        write_lhe(d / "unweighted_events.lhe.gz", n=n_events, gz=True)
+    gaussian_hist(d / "top_mass_hist.json", peak=peak)
+    (d / "top_mass.pdf").write_bytes(b"%PDF-1.4")
+    return name, grade_workspace(open_spec(), d)
+
+
+def test_identical_pipelines_match_on_both_artefacts(tmp_path):
+    comp = compare_graded([graded_run(tmp_path, "a"), graded_run(tmp_path, "b")])
+    assert comp.events_identical
+    assert comp.histograms_identical
+    assert comp.notes == []
+
+
+def test_same_events_different_reconstruction_is_not_a_seed_failure(tmp_path):
+    """The interesting case: seeds held, methods differed."""
+    comp = compare_graded([graded_run(tmp_path, "a", peak=170.0),
+                           graded_run(tmp_path, "b", peak=175.0)])
+    assert comp.events_identical, "the LHE is the same, so the seeds held"
+    assert not comp.histograms_identical
+    assert comp.peak_spread_gev() == pytest.approx(5.0)
+    assert any("reconstruction methods differ" in n for n in comp.notes)
+
+
+def test_differing_events_at_the_same_version_blames_the_seed(tmp_path):
+    comp = compare_graded([graded_run(tmp_path, "a", n_events=3, version="3.5.16"),
+                           graded_run(tmp_path, "b", n_events=4, version="3.5.16")])
+    assert not comp.events_identical
+    assert comp.versions_agree
+    assert any("a seed was not honoured" in n for n in comp.notes)
+
+
+def test_differing_events_across_versions_says_so_instead(tmp_path):
+    comp = compare_graded([graded_run(tmp_path, "a", n_events=3, version="3.5.16"),
+                           graded_run(tmp_path, "b", n_events=4, version="3.6.1")])
+    assert not comp.events_identical
+    assert not comp.versions_agree
+    assert any("generator versions differ" in n for n in comp.notes)
+    assert not any("seed was not honoured" in n for n in comp.notes)
+
+
+def test_unknown_versions_are_not_reported_as_differing(tmp_path):
+    """Unknown tells us nothing; calling it a difference blames the wrong thing."""
+    comp = compare_graded([graded_run(tmp_path, "a", n_events=3),
+                           graded_run(tmp_path, "b", n_events=4)])
+    assert not comp.events_identical
+    assert not comp.versions_known and not comp.versions_agree
+    assert any("cannot be ruled out" in n for n in comp.notes)
+    assert not any("versions differ (" in n for n in comp.notes)
+    assert not any("seed was not honoured" in n for n in comp.notes)
+
+
+def test_coincident_peaks_produce_no_spread_note(tmp_path):
+    comp = compare_graded([graded_run(tmp_path, "a", peak=172.5),
+                           graded_run(tmp_path, "b", peak=172.5)])
+    assert comp.peak_spread_gev() == 0.0
+    assert not any("span" in n for n in comp.notes)

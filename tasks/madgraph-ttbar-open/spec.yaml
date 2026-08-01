@@ -24,7 +24,14 @@ requirements:
   beam_energy_gev: 6800
   beam_pdg: [2212, 2212]
   final_state_pdg: [6, -6]
-  seed: 42
+
+  # Every stochastic stage is pinned, so two runs of the same pipeline are
+  # byte-identical and two runs from different agents differ only where their
+  # *methods* differ. Neither seed is machine-checkable from the output —
+  # they are enforced by comparing runs against each other.
+  seeds:
+    hard_process: 42        # MadGraph
+    shower: 42              # Pythia 8
 
   # Reconstructed, not generated: jets, combinatorics and out-of-cone losses
   # shift and broaden the peak, so the window is wide on purpose. A peak

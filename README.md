@@ -385,6 +385,45 @@ Whether the split task produces byte-identical events to the single-phase one
 is an empirical question — check it with `verify-events` rather than assuming
 it. `madgraph-ttbar-lhe` is untouched, so existing results stay comparable.
 
+### Comparing runs exactly
+
+Every stochastic stage in the open brief is pinned — MadGraph seed 42, Pythia
+seed 42, and any randomness the agent introduces must be seeded too — so runs
+can be compared event by event:
+
+```sh
+uv run llm-energy compare-deliverables \
+  --run fable ~/llm-energy-workspaces/madgraph-ttbar-open-A \
+  --run haiku ~/llm-energy-workspaces/madgraph-ttbar-open-B
+```
+
+```
+ generator version   3.5.16         3.5.16
+ event hash          94b2d3eaf82b   94b2d3eaf82b
+ histogram hash      37a4180fbf1f   16a0685bc157
+ peak (GeV)          171.0          176.0
+events IDENTICAL — the pinned seeds held
+histograms differ — expected when the reconstruction methods differ
+```
+
+The two artefacts carry different expectations, and conflating them would
+mislead:
+
+- **Events must match.** Same generator, same version, same seed. A difference
+  means a seed was not honoured — or the versions differ, which the tool
+  checks first, because an unrecorded or mismatched version explains different
+  events on its own and blaming a seed would be wrong.
+- **Histograms need not.** Two agents reconstructing the top differently reach
+  different histograms from identical events. That is the method varying, not
+  a reproducibility failure — and it is the interesting comparison: same
+  physics in, how far apart do the answers land. Identical histograms *with*
+  differing events is the one suspicious combination, and is flagged: it
+  usually means a histogram was reused rather than regenerated.
+
+Histograms are fingerprinted over their values, not their JSON text, so
+formatting choices do not masquerade as physics differences.
+
+
 ### Adding phases to your own task
 
 Any `task.yaml` can use `phases:` instead of `command:`:

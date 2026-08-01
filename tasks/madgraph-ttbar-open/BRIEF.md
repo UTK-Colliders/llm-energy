@@ -16,14 +16,40 @@ top quark is there.
 
 Use MadGraph5_aMC@NLO as the generator.
 
-The seed is fixed so that this sample can be compared against ones produced
-by other people working from this same brief. Everything in the table is a
-requirement on the output; how you satisfy it is yours to work out.
+Everything in the table is a requirement on the output; how you satisfy it is
+yours to work out.
 
 ## Step 2 — shower the events
 
 Pass the parton-level events through **Pythia 8** for parton showering and
 hadronisation. Let the tops decay.
+
+| Property | Required value |
+|---|---|
+| Random seed | 42 |
+
+## Reproducibility
+
+Your results will be compared, event by event, against samples produced by
+other people working from this same brief. That only works if nothing in your
+chain is left to chance:
+
+- **Seed every stochastic stage.** Both seeds above are fixed. If your
+  showering defaults to a clock-based or randomly-chosen seed, override it —
+  a seed of `0` means "pick one from the clock" in some tools, which is
+  exactly what must not happen here.
+- **Seed anything else you introduce.** If any part of your reconstruction
+  draws random numbers, fix its seed too.
+- **Parallelism must not change the answer.** Splitting generation across
+  workers with different seeds, or merging their output in completion order,
+  will not reproduce.
+- **Check it.** Running your pipeline twice must produce byte-identical
+  output. If it does not, something is unseeded — find it before reporting.
+
+Record the exact **version** of each generator you used, and say so in your
+report. Two runs with the same seed but different generator versions produce
+different events, and without the versions a difference cannot be told from a
+mistake.
 
 ## Step 3 — reconstruct the top quark
 
@@ -62,6 +88,8 @@ When you are done, report:
 - how many events the sample has, and where the peak sits;
 - what you did at each of the three steps, briefly — enough that someone could
   repeat it, including which decay channel and jet definition you used;
+- the exact version of each generator, and the seed you gave each one;
+- whether you verified that a rerun reproduces the same output;
 - roughly how long the generation, showering, and analysis each took, as
   distinct from the time you spent working out what to do;
 - anything you are unsure about in the result.

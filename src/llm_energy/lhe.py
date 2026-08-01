@@ -93,6 +93,36 @@ def read_init(path: Path) -> dict | None:
     return None
 
 
+def read_generator_version(path: Path) -> str | None:
+    """Generator version from the LHE header, if it recorded one.
+
+    Two runs with the same seed but different generator versions produce
+    different events, so a version difference has to be distinguishable from
+    a mistake when hashes disagree. Only the header is scanned — the events
+    themselves can be millions of lines.
+    """
+    import re
+
+    want_next = False
+    with _open_text(path) as fh:
+        for raw in fh:
+            line = raw.strip()
+            if line.startswith("<event"):
+                break
+            if want_next and line and not line.startswith("<"):
+                return line
+            if line.startswith("<MGVersion>"):
+                inline = line[len("<MGVersion>"):].replace("</MGVersion>", "").strip()
+                if inline:
+                    return inline
+                want_next = True
+                continue
+            m = re.search(r"MadGraph5_aMC@NLO\s+v?\.?\s*([\d][\w.]*)", line)
+            if m:
+                return m.group(1)
+    return None
+
+
 def final_state_pdgs(event_lines: list[str]) -> tuple[int, ...] | None:
     """Sorted PDG ids of the outgoing particles in one normalized event block.
 

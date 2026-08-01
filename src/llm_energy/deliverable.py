@@ -19,7 +19,8 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from llm_energy.lhe import event_summary, final_state_pdgs, iter_events, read_init
+from llm_energy.lhe import (event_summary, final_state_pdgs, iter_events,
+                            read_generator_version, read_init)
 
 
 @dataclass
@@ -36,6 +37,7 @@ class DeliverableReport:
     checks: list[Check] = field(default_factory=list)
     n_events: int = 0
     events_sha256: str = ""
+    generator_version: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -97,6 +99,7 @@ def verify_lhe(path: Path,
 
     if n:
         report.n_events, report.events_sha256 = event_summary(path)
+    report.generator_version = read_generator_version(path)
     return report
 
 
@@ -109,6 +112,7 @@ class MassPeakReport:
     peak_gev: float | None = None
     fwhm_gev: float | None = None
     prominence: float | None = None
+    histogram_sha256: str = ""
 
     @property
     def ok(self) -> bool:
@@ -117,6 +121,20 @@ class MassPeakReport:
     @property
     def failures(self) -> list[Check]:
         return [c for c in self.checks if not c.ok]
+
+
+def histogram_fingerprint(edges: list[float], counts: list[float]) -> str:
+    """SHA-256 over the histogram's values, not its JSON text.
+
+    Formatting choices — trailing zeros, integer vs float, key order — are not
+    physics, so two identical histograms written differently must fingerprint
+    the same. Values are rendered at a fixed precision to make that so.
+    """
+    import hashlib
+
+    payload = (";".join(f"{e:.9g}" for e in edges) + "|"
+               + ";".join(f"{c:.9g}" for c in counts))
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _peak_stats(edges: list[float], counts: list[float]):
@@ -202,6 +220,7 @@ def verify_mass_peak(path: Path,
     check("entries", total >= min_entries,
           f"{total:.0f} entries, wanted at least {min_entries}")
 
+    report.histogram_sha256 = histogram_fingerprint(edges, counts)
     peak_i, centre, fwhm, prominence = _peak_stats(edges, counts)
     report.peak_gev, report.fwhm_gev, report.prominence = centre, fwhm, prominence
 
@@ -347,3 +366,87 @@ def grade_workspace(spec: "OpenSpec", workspace: Path,
         graded.plot_missing = not (workspace / spec.plot_path).exists()
 
     return graded
+
+
+@dataclass
+class DeliverableComparison:
+    """Two or more open runs, compared artefact by artefact."""
+    labels: list[str] = field(default_factory=list)
+    event_hashes: list[str] = field(default_factory=list)
+    histogram_hashes: list[str] = field(default_factory=list)
+    generator_versions: list[str | None] = field(default_factory=list)
+    peaks_gev: list[float | None] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def events_identical(self) -> bool:
+        hashes = [h for h in self.event_hashes if h]
+        return len(hashes) == len(self.labels) and len(set(hashes)) == 1
+
+    @property
+    def histograms_identical(self) -> bool:
+        hashes = [h for h in self.histogram_hashes if h]
+        return len(hashes) == len(self.labels) and len(set(hashes)) == 1
+
+    @property
+    def versions_known(self) -> bool:
+        return all(v for v in self.generator_versions)
+
+    @property
+    def versions_agree(self) -> bool:
+        """True only when every version is known and they match.
+
+        Unknown is not the same as differing: a sample whose banner carried no
+        version tells us nothing about whether the versions matched, and
+        reporting that as a difference would blame the wrong thing.
+        """
+        return (self.versions_known
+                and len(set(self.generator_versions)) == 1)
+
+    def peak_spread_gev(self) -> float | None:
+        known = [p for p in self.peaks_gev if p is not None]
+        return max(known) - min(known) if len(known) > 1 else None
+
+
+def compare_graded(labelled: list[tuple[str, GradedWorkspace]]) -> DeliverableComparison:
+    """Compare graded runs.
+
+    Expectations differ by artefact, and conflating them would mislead:
+
+    - **Events must match.** Same generator, same version, same pinned seed —
+      a difference means a seed was not honoured or the versions differ.
+    - **Histograms need not.** Two agents that reconstruct the top differently
+      land on different histograms from identical events; that is the method
+      varying, not a reproducibility failure. Identical histograms mean the
+      pipelines agree all the way down, which is what a rerun should show.
+    """
+    comp = DeliverableComparison()
+    for label, g in labelled:
+        comp.labels.append(label)
+        comp.event_hashes.append(g.events.events_sha256 if g.events else "")
+        comp.generator_versions.append(
+            g.events.generator_version if g.events else None)
+        comp.histogram_hashes.append(g.peak.histogram_sha256 if g.peak else "")
+        comp.peaks_gev.append(g.peak.peak_gev if g.peak else None)
+
+    if not comp.events_identical:
+        if not comp.versions_known:
+            comp.notes.append(
+                "generator versions were not recorded in every sample, so a "
+                "version difference cannot be ruled out as the cause — check "
+                "the agents' reports before blaming a seed")
+        elif not comp.versions_agree:
+            comp.notes.append(
+                "generator versions differ ("
+                + ", ".join(str(v) for v in comp.generator_versions)
+                + "), which alone explains different events at a fixed seed")
+        else:
+            comp.notes.append(
+                "same generator version but different events — a seed was not "
+                "honoured somewhere in the hard-process step")
+    spread = comp.peak_spread_gev()
+    if spread:
+        comp.notes.append(
+            f"peak positions span {spread:.1f} GeV across runs — expected when "
+            "the reconstruction methods differ, since the events do not")
+    return comp

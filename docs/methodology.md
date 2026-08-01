@@ -225,6 +225,32 @@ rather than the MG5 banner, which is free text the agent could have produced
 by any route. A sample generated unconventionally still passes; a plausible
 banner over the wrong physics still fails.
 
+### Seeding, and what exact comparison can mean
+
+Every stochastic stage of the open task is pinned: the hard process (MadGraph,
+seed 42), the shower (Pythia 8, seed 42), and any randomness the agent
+introduces in reconstruction. The brief additionally requires that a rerun of
+the agent's own pipeline reproduce byte-identical output, which is the only
+check that catches an unseeded stage the brief did not anticipate — a
+clock-seeded shower, or workers merged in completion order.
+
+Seeding buys different things at different stages, and the comparison tool
+keeps them apart:
+
+- **Event samples must be identical** across agents. Same generator, same
+  version, same seed leaves nothing free. A difference is a defect.
+- **Histograms are not expected to be identical** across agents. The
+  reconstruction method is the agent's to choose, so identical events
+  legitimately yield different histograms; the spread of peak positions across
+  methods is a result, not an error. Only a rerun of the *same* pipeline
+  should reproduce the histogram exactly.
+
+Generator versions confound this: the same seed in different MG5 versions
+gives different events. The version is therefore read from the LHE banner and
+reported alongside the hashes, and an unrecorded version is distinguished from
+a mismatched one — unknown is not evidence of difference, and treating it as
+such would blame a seed for a version's doing.
+
 ### Grading a reconstructed mass peak
 
 The figure asked for in step 3 cannot be graded: relabel its axes and it looks
