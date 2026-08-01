@@ -543,17 +543,21 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
         if sp.net_joules is not None:
             rows.append(("Session energy (net of idle)",
                          f"{sp.net_joules:.1f} J ({_wh(sp.net_joules):.3f} Wh)"))
+        # Both terms net of idle where a baseline exists: an agent session is
+        # mostly network wait, so gross is dominated by draw the machine would
+        # have had anyway and would overstate the agent's cost several-fold.
+        basis = sp.energy_basis()
+        compute = sp.container_net_joules()
         outside = sp.outside_container_joules()
-        if sp.container_joules is not None:
-            rows.append(("E_compute (in containers, measured)",
-                         f"{sp.container_joules:.1f} J "
-                         f"({_wh(sp.container_joules):.3f} Wh) over "
+        if compute is not None:
+            rows.append((f"E_compute (in containers, {basis})",
+                         f"{compute:.1f} J ({_wh(compute):.3f} Wh) over "
                          f"{sp.container_wall_s:.0f} s, "
                          f"{len(sp.containers)} container(s)"))
         if outside is not None:
-            share = (100.0 * outside / sp.gross_joules
-                     if sp.gross_joules > 0 else float("nan"))
-            rows.append(("E_coord,local (outside containers, measured)",
+            total = (compute or 0.0) + outside
+            share = 100.0 * outside / total if total > 0 else float("nan")
+            rows.append((f"E_coord,local (outside containers, {basis})",
                          f"{outside:.1f} J ({_wh(outside):.3f} Wh), "
                          f"{share:.1f}% of the session"))
     rows += [

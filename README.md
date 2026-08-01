@@ -279,8 +279,18 @@ models. Subtract it from an open run and what's left is the cost of figuring
 the problem out.
 
 ```sh
-scripts/measure-run.sh --task madgraph-ttbar-open
+scripts/measure-run.sh --task madgraph-ttbar-open --allow-all-tools
 ```
+
+A headless session has nobody to approve tool use, so every Bash and Write call
+is denied and the agent talks for a few minutes and produces nothing — a full
+measurement run spent on an empty result. `--allow-all-tools` passes
+`--dangerously-skip-permissions`, which is what it sounds like: the agent runs
+commands, installs software and starts containers as you, unattended. Do that
+only on a machine you would hand over. `--interactive` is the alternative —
+you approve each call, at the cost of your own attention being in the loop.
+The script refuses a headless run without one of the two rather than collect a
+run that cannot work.
 
 **The workspace is outside the repo on purpose.** Inside it, an agent can find
 that worked card, and a good one *would* — at which point the open task

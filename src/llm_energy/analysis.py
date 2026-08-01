@@ -121,16 +121,18 @@ def build_budget(label: str,
             budget.notes.append(
                 "compute and coordination could not be separated for this run")
         else:
+            compute = session_power.container_net_joules()
             outside = session_power.outside_container_joules()
+            note = session_power.energy_basis()
             budget.components.append(Component(
                 name="compute (containers)", basis=MEASURED,
-                joules=session_power.container_joules,
+                joules=compute if compute is not None else 0.0,
                 detail=f"{len(session_power.containers)} container(s), "
-                       f"{session_power.container_wall_s:.0f} s"))
+                       f"{session_power.container_wall_s:.0f} s, {note}"))
             budget.components.append(Component(
                 name="coordination (local)", basis=MEASURED,
                 joules=outside if outside is not None else 0.0,
-                detail="outside any container"))
+                detail=f"outside any container, {note}"))
 
     if session is not None:
         b = session.total_band

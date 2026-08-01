@@ -201,18 +201,40 @@ class SessionPowerResult:
     container_joules: float | None = None
     container_wall_s: float | None = None
     notes: list[str] = field(default_factory=list)
-
-    def outside_container_joules(self) -> float | None:
-        """Session energy not spent inside any container — the agent thinking,
-        reading, and writing, as opposed to the computation it launched."""
-        if not self.power_ok or self.container_joules is None:
-            return None
-        return self.gross_joules - self.container_joules
     machine: MachineInfo = field(default_factory=MachineInfo)
     schema_version: int = SCHEMA_VERSION
     tool_version: str = __version__
     created_at: str = field(default_factory=now_iso)
     kind: str = "session-power"
+
+    def outside_container_joules(self, net: bool = True) -> float | None:
+        """Energy spent outside any container — the agent thinking and reading.
+
+        Net of the idle baseline by default. An agent session is mostly spent
+        waiting on the network, so gross would be dominated by draw the machine
+        would have had anyway; the marginal cost of the agent working is the
+        quantity of interest. Falls back to gross when no baseline was applied.
+        """
+        if not self.power_ok or self.container_joules is None:
+            return None
+        outside = self.gross_joules - self.container_joules
+        if not net or self.baseline_mean_w is None:
+            return outside
+        idle_s = self.wall_time_s - (self.container_wall_s or 0.0)
+        return outside - self.baseline_mean_w * idle_s
+
+    def container_net_joules(self) -> float | None:
+        """Container energy net of the idle baseline over their windows."""
+        if not self.power_ok or self.container_joules is None:
+            return None
+        if self.baseline_mean_w is None:
+            return self.container_joules
+        return (self.container_joules
+                - self.baseline_mean_w * (self.container_wall_s or 0.0))
+
+    def energy_basis(self) -> str:
+        return ("net of idle baseline" if self.baseline_mean_w is not None
+                else "gross")
 
 
 @dataclass

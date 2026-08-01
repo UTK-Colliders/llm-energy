@@ -292,3 +292,51 @@ def test_container_windows_outside_the_session_flag_clock_disagreement(
     install(monkeypatch, [window(-9000, -8000)])
     res = run(CannedBackend(10.0, 12), tmp_path)
     assert any("daemon clock disagrees" in n for n in res.notes)
+
+
+# --- net-of-idle accounting ---------------------------------------------------
+
+def real_session():
+    """The first real open run: 395 s, an idle-dominated session, no containers.
+
+    Gross 260.5 J over a 0.434 W baseline leaves 89.1 J of marginal cost — so
+    two thirds of the gross figure is draw the Mac would have had anyway.
+    """
+    from llm_energy.schemas import SessionPowerResult
+    return SessionPowerResult(
+        command=["claude"], wall_time_s=395.0, gross_joules=260.5,
+        baseline_ref="b.json", baseline_mean_w=0.434, net_joules=89.1,
+        mean_power_w=0.66, alignment_uncertainty_j=0.66,
+        backend="powermetrics", exit_code=0,
+        container_joules=0.0, container_wall_s=0.0)
+
+
+def test_coordination_is_net_of_idle_not_gross():
+    sp = real_session()
+    assert sp.outside_container_joules() == pytest.approx(89.1, abs=0.5)
+    assert sp.outside_container_joules(net=False) == pytest.approx(260.5)
+
+
+def test_with_no_containers_coordination_equals_the_session_net():
+    sp = real_session()
+    assert sp.outside_container_joules() == pytest.approx(sp.net_joules, abs=0.5)
+
+
+def test_container_energy_is_also_netted():
+    sp = real_session()
+    sp.container_joules = 100.0
+    sp.container_wall_s = 60.0
+    # 100 J inside the containers, less 0.434 W of idle over their 60 s
+    assert sp.container_net_joules() == pytest.approx(100.0 - 0.434 * 60)
+    # and the two net terms still add up to the session net
+    assert (sp.container_net_joules() + sp.outside_container_joules()
+            == pytest.approx(sp.net_joules, abs=0.5))
+
+
+def test_without_a_baseline_both_terms_fall_back_to_gross():
+    sp = real_session()
+    sp.baseline_mean_w = None
+    sp.container_joules = 100.0
+    assert sp.outside_container_joules() == pytest.approx(160.5)
+    assert sp.container_net_joules() == pytest.approx(100.0)
+    assert sp.energy_basis() == "gross"

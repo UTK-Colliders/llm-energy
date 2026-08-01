@@ -14,6 +14,8 @@
 #   --model NAME         pass --model to claude (for cross-model comparison)
 #   --label NAME         label for the report (default: the model, else "run")
 #   --interactive        supervise the session instead of running headless
+#   --allow-all-tools    let the headless agent use tools without prompting
+#                        (it will install software and run containers as you)
 #   --baseline-seconds N idle baseline duration (default: 120)
 #   --skip-baseline      reuse the newest baseline for this machine
 #   --backend NAME       powermetrics | rapl | tdp-model (default: auto)
@@ -24,6 +26,7 @@ TASK=madgraph-ttbar-lhe
 MODEL=""
 LABEL=""
 INTERACTIVE=0
+ALLOW_TOOLS=0
 BASELINE_SECONDS=120
 SKIP_BASELINE=0
 BACKEND=""
@@ -37,10 +40,11 @@ while [ $# -gt 0 ]; do
     --model)             MODEL=${2:?--model needs a value}; shift 2 ;;
     --label)             LABEL=${2:?--label needs a value}; shift 2 ;;
     --interactive)       INTERACTIVE=1; shift ;;
+    --allow-all-tools)   ALLOW_TOOLS=1; shift ;;
     --baseline-seconds)  BASELINE_SECONDS=${2:?--baseline-seconds needs a value}; shift 2 ;;
     --skip-baseline)     SKIP_BASELINE=1; shift ;;
     --backend)           BACKEND=${2:?--backend needs a value}; shift 2 ;;
-    -h|--help)           sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)           sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)                   die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -149,7 +153,18 @@ CLAUDE_ARGS=()
 if [ "$INTERACTIVE" -eq 1 ]; then
   CLAUDE_ARGS+=("$PROMPT")
 else
-  CLAUDE_ARGS+=(-p "$PROMPT")
+  # A headless session has nobody to approve tool use, so every Bash and Write
+  # call is denied: the agent talks for a few minutes and produces nothing,
+  # which still costs a full measurement run. Refuse to start rather than
+  # collect that.
+  if [ "$ALLOW_TOOLS" -eq 0 ]; then
+    die "a headless run cannot use tools, so it would produce nothing.
+  Either --interactive (approve tool calls yourself), or --allow-all-tools
+  (the agent runs commands, installs software and starts containers as you,
+  unattended, in $WORKSPACE — only do this on a machine you are willing to
+  hand over)."
+  fi
+  CLAUDE_ARGS+=(--dangerously-skip-permissions -p "$PROMPT")
 fi
 
 step "Measured coordination session${MODEL:+ (model: $MODEL)}"
@@ -171,6 +186,14 @@ if [ "$OPEN" -eq 1 ]; then
   # against; the session-power result carries the sessions it observed.
   uv run llm-energy analyze-session --for-session-power "$SESSION_POWER" \
                                     --out-file "$SESSION_ENERGY"
+
+  if ! grep -q '"containers": \[[^]]' "$SESSION_POWER" 2>/dev/null; then
+    echo
+    echo "note: the agent started no containers at all. If the deliverables are"
+    echo "      also missing, it never got as far as running anything — check"
+    echo "      the session output above before trusting these energy figures"
+    echo "      as a measurement of doing the task."
+  fi
 
   step "Deliverable"
   # Not fatal: a run that burned tokens and produced nothing usable is a
