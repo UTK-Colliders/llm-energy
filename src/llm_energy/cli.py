@@ -134,7 +134,7 @@ def doctor(task_name: str, task_dir: Path, coefficients: Path):
 # --- baseline ---------------------------------------------------------------
 
 @main.command()
-@click.option("--duration", default=120.0, show_default=True, help="seconds")
+@click.option("--duration", default=30.0, show_default=True, help="seconds")
 @click.option("--interval-ms", default=1000, show_default=True)
 @click.option("--backend", "backend_name", default=None,
               type=click.Choice(["powermetrics", "rapl", "tdp-model"]))

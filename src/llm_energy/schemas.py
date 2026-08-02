@@ -163,6 +163,9 @@ class ObservedContainer:
     wall_time_s: float
     gross_joules: float
     mean_power_w: float
+    # True when the container outlived the session: its window was clamped to
+    # the session end, so this is a lower bound and the run was cut off
+    still_running: bool = False
 
 
 @dataclass

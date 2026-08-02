@@ -77,12 +77,15 @@ reported as `alignment_uncertainty_j ≈ mean_W × interval`.
 
 ### Baseline
 
-`llm-energy baseline` measures idle package power (default 120 s) with the
+`llm-energy baseline` measures idle package power (default 30 s) with the
 machine quiesced **and the Docker VM running but idle** — Docker Desktop's VM
 has nonzero idle draw that belongs in the subtracted baseline, not in the
 task. The tool warns if Docker is not running during a baseline. Net energy
 is `E_net = E_gross − P̄_baseline × t_wall`. Both gross and net are reported;
-the baseline's standard deviation is recorded so noisy baselines are visible.
+the baseline's standard deviation is recorded so noisy baselines are visible —
+which matters more at the 30 s default than it did at 120 s, since a shorter
+window averages over fewer samples. Lengthen it with `--duration` if the
+recorded std is a large fraction of the mean.
 `run-task --baseline latest` only accepts baselines recorded on the same
 machine (chip + hostname match).
 

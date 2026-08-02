@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -122,22 +123,37 @@ def measure_session(command: list[str],
                 f"{len(outside_window)} container window(s) fall outside the "
                 "measured session, so the daemon clock disagrees with this "
                 "machine's — the in/out-of-container split is unreliable")
+        # A container still running when the session ends was demonstrably up
+        # from its start until then, so that stretch is attributable even
+        # though its full lifetime is not. Dropping it instead would bill its
+        # energy to coordination and report E_compute as a clean zero — the
+        # instrument failing in the direction that looks like a measurement.
+        closed: list = []
         for w in container_windows:
-            if w.ended_at is None:
-                notes.append(f"container {w.container_id} ({w.image}) was still "
-                             "running at session end; its energy is not attributed")
+            still_running = w.ended_at is None
+            end = t_end_wall if still_running else w.ended_at
+            if end <= w.started_at:
                 continue
+            clamped = replace(w, ended_at=end)
+            closed.append(clamped)
             e = trace.integrate_joules(t_start=to_trace_rel(w.started_at),
-                                       t_end=to_trace_rel(w.ended_at))
+                                       t_end=to_trace_rel(end))
+            wall = (end - w.started_at).total_seconds()
             observed.append(ObservedContainer(
                 container_id=w.container_id, image=w.image,
-                started_at=w.started_at.isoformat(),
-                ended_at=w.ended_at.isoformat(), wall_time_s=w.wall_time_s,
-                gross_joules=e,
-                mean_power_w=e / w.wall_time_s if w.wall_time_s > 0 else 0.0))
+                started_at=w.started_at.isoformat(), ended_at=end.isoformat(),
+                wall_time_s=wall, gross_joules=e,
+                mean_power_w=e / wall if wall > 0 else 0.0,
+                still_running=still_running))
+            if still_running:
+                notes.append(
+                    f"container {w.container_id} ({w.image}) was still running "
+                    "when the session ended — the work was cut off mid-flight, "
+                    "so this run is incomplete and its energy is a lower bound. "
+                    f"Clean it up with `docker rm -f {w.container_id}`")
         # union, so overlapping containers are counted once and the figure
         # stays subtractable from the session total
-        merged = merge_windows(container_windows)
+        merged = merge_windows(closed)
         container_j = sum(trace.integrate_joules(t_start=to_trace_rel(a),
                                                  t_end=to_trace_rel(b))
                           for a, b in merged)

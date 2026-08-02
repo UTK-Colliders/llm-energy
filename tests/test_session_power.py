@@ -198,9 +198,14 @@ def with_events(patched, monkeypatch):
     start = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
     _SESSION_START[0] = start
 
+    # start and end must differ, or clamping an unfinished container to the
+    # session end would give it a zero-length window
+    from datetime import timedelta
+    stamps = iter([start, start + timedelta(seconds=4)])
+
     class FixedClock:
         def now(self, tz=None):
-            return start
+            return next(stamps)
     monkeypatch.setattr(sp, "datetime", FixedClock())
     return start
 
@@ -241,13 +246,29 @@ def test_overlapping_containers_are_not_double_counted(with_events, monkeypatch,
     assert len(res.containers) == 2
 
 
-def test_container_still_running_at_session_end_is_flagged_not_counted(
+def test_container_still_running_is_attributed_up_to_the_session_end(
+        with_events, monkeypatch, tmp_path):
+    """Dropping it would bill its energy to coordination and report a clean
+    zero for compute — the instrument failing in the shape of a measurement."""
+    install(monkeypatch, [window(1, None)])
+    res = run(CannedBackend(10.0, 12), tmp_path)
+
+    # the container was up from 1 s into the session until the end at 4 s
+    assert len(res.containers) == 1
+    assert res.containers[0].still_running is True
+    assert res.container_joules == pytest.approx(30.0)   # 3 s at 10 W
+    assert res.outside_container_joules() == pytest.approx(10.0)
+    assert any("cut off mid-flight" in n for n in res.notes)
+    assert any("docker rm -f" in n for n in res.notes)
+
+
+def test_an_unfinished_container_no_longer_reads_as_zero_compute(
         with_events, monkeypatch, tmp_path):
     install(monkeypatch, [window(1, None)])
     res = run(CannedBackend(10.0, 12), tmp_path)
-    assert res.containers == []
-    assert res.container_joules == pytest.approx(0.0)
-    assert any("still" in n and "running" in n for n in res.notes)
+    assert res.container_joules > 0
+    # and it must not swallow the whole session either
+    assert res.container_joules < res.gross_joules
 
 
 def test_no_docker_means_no_split_but_a_valid_total(with_events, monkeypatch,

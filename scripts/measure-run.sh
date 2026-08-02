@@ -16,7 +16,7 @@
 #   --interactive        supervise the session instead of running headless
 #   --allow-all-tools    let the headless agent use tools without prompting
 #                        (it will install software and run containers as you)
-#   --baseline-seconds N idle baseline duration (default: 120)
+#   --baseline-seconds N idle baseline duration (default: 30)
 #   --skip-baseline      reuse the newest baseline for this machine
 #   --backend NAME       powermetrics | rapl | tdp-model (default: auto)
 #
@@ -27,7 +27,7 @@ MODEL=""
 LABEL=""
 INTERACTIVE=0
 ALLOW_TOOLS=0
-BASELINE_SECONDS=120
+BASELINE_SECONDS=30
 SKIP_BASELINE=0
 BACKEND=""
 

@@ -181,7 +181,7 @@ scripts/measure-run.sh
 
 That is the whole thing. It runs `doctor`, makes sure the task image is built
 (*before* the measurement starts, so a 10–20 min build is never charged to the
-agent), takes a 2-minute idle baseline, starts a fresh headless Claude Code
+agent), takes a 30-second idle baseline, starts a fresh headless Claude Code
 session pointed at the task brief, measures package power for as long as that
 session runs, then pairs the artifacts and writes a report. Useful flags:
 
@@ -212,8 +212,8 @@ behaviour, and both are part of the experiment:
 The script is four commands in a trench coat, if you'd rather drive them:
 
 ```sh
-# 1. Idle baseline (~2 min). Quiesce the machine; leave Docker running idle.
-uv run llm-energy baseline --duration 120
+# 1. Idle baseline (30 s). Quiesce the machine; leave Docker running idle.
+uv run llm-energy baseline
 
 # 2. Run the agent under power measurement. Everything it does counts.
 uv run llm-energy measure-session -- \
