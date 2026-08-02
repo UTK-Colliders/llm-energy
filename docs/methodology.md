@@ -75,6 +75,14 @@ window (matched via monotonic timestamps). Residual skew between the
 powermetrics clock and the harness clock is at most about one interval and is
 reported as `alignment_uncertainty_j ≈ mean_W × interval`.
 
+A sample straddling a window boundary contributes only the fraction of itself
+that overlaps. This matters for the short-lived containers an open run leaves
+behind: with all-or-nothing attribution, a sub-second container either
+swallowed a whole sampling interval — one observed run reported 20.7 J at
+264 W over a window rendered as "0 s" — or missed one and reported a clean
+zero. Neither is a measurement of anything. Clipping keeps short windows
+proportionate and leaves the unbounded total unchanged.
+
 ### Baseline
 
 `llm-energy baseline` measures idle package power (default 30 s) with the
@@ -88,6 +96,23 @@ window averages over fewer samples. Lengthen it with `--duration` if the
 recorded std is a large fraction of the mean.
 `run-task --baseline latest` only accepts baselines recorded on the same
 machine (chip + hostname match).
+
+Two guards exist because a bad baseline does not fail, it deflates. Its
+subtraction is applied to every later measurement, so a capture taken while
+the machine was still busy shaves watts off results recorded hours afterwards
+without ever announcing itself.
+
+- **At capture.** `baseline` warns when the samples scatter by more than 20%
+  of their mean, or when the figure is more than 25% above the previous
+  baseline for the same machine. Both mean something was running.
+- **At use.** A baseline at or above a session's own mean power is *rejected*
+  for that session, not subtracted. It is not an idle floor — it was recorded
+  while the machine was busier than the session it is meant to correct — and
+  subtracting it produces negative joules, which read as measurements rather
+  than as a broken instrument. The affected session then reports its derived
+  terms **gross**, labelled `gross — idle baseline rejected`, and the net row
+  states the two powers instead of their difference. The recorded `net_joules`
+  stays in the JSON as captured; it is the report that declines to present it.
 
 ### Docker on macOS
 
@@ -308,11 +333,17 @@ restricted to the child's wall-time window. The measured task run happens
 
     E_coord,local = E_session − E_task
 
-with both terms net of the idle baseline when both carry one, and gross
-otherwise — the idle term must be removed from both windows or from neither.
-The report flags three ways this subtraction can be invalid: the two runs
-having used different power backends, the task window not lying inside the
-session window, and a negative result.
+with both terms net of the idle baseline when both carry one and that baseline
+survives the rejection test above, and gross otherwise — the idle term must be
+removed from both windows or from neither. The report flags three ways this
+subtraction can be invalid: the two runs having used different power backends,
+the task window not lying inside the session window, and a negative result.
+
+For an open run the same split is computed against observed containers rather
+than a task result, and the shares carry one further condition: a percentage
+is shown only when both parts are positive and sum to the whole. Otherwise the
+split is not a partition of anything and the figure is omitted rather than
+printed as `nan%`.
 
 This closes a gap the token-only pipeline leaves open. E_LLM covers estimated
 *remote* inference; it says nothing about the laptop running hot for forty

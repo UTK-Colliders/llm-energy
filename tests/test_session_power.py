@@ -361,3 +361,62 @@ def test_without_a_baseline_both_terms_fall_back_to_gross():
     assert sp.outside_container_joules() == pytest.approx(160.5)
     assert sp.container_net_joules() == pytest.approx(100.0)
     assert sp.energy_basis() == "gross"
+
+
+# --- a baseline that is not an idle floor ------------------------------------
+
+def contaminated_baseline_session():
+    """The run that produced negative energy in every derived row.
+
+    324 s at 20.48 W mean, measured against a 30 s baseline that came out at
+    20.95 W — captured while the Mac was still busy from the preflight. The
+    subtraction then reports -162.9 J for the session and -148.7 J of compute
+    across five containers that demonstrably ran MadGraph.
+    """
+    from llm_energy.schemas import SessionPowerResult
+    return SessionPowerResult(
+        command=["claude"], wall_time_s=324.0, gross_joules=6626.7,
+        baseline_ref="b.json", baseline_mean_w=20.95, net_joules=-162.9,
+        mean_power_w=20.48, alignment_uncertainty_j=20.48,
+        backend="powermetrics", exit_code=0,
+        container_joules=2602.9, container_wall_s=131.0)
+
+
+def test_a_baseline_above_the_session_mean_is_rejected():
+    sp = contaminated_baseline_session()
+    assert not sp.baseline_usable()
+    assert sp.energy_basis() == "gross — idle baseline rejected"
+
+
+def test_rejecting_the_baseline_falls_back_to_gross_not_to_negatives():
+    sp = contaminated_baseline_session()
+    compute = sp.container_net_joules()
+    outside = sp.outside_container_joules()
+    assert compute == pytest.approx(2602.9)
+    assert outside == pytest.approx(6626.7 - 2602.9)
+    assert compute > 0 and outside > 0, "energy spent is not negative"
+    # and the parts still make up the gross whole they are now quoted against
+    assert compute + outside == pytest.approx(sp.gross_joules)
+
+
+def test_a_baseline_below_the_session_mean_is_still_subtracted():
+    sp = contaminated_baseline_session()
+    sp.baseline_mean_w = 8.0
+    assert sp.baseline_usable()
+    assert sp.container_net_joules() == pytest.approx(2602.9 - 8.0 * 131.0)
+    assert sp.energy_basis() == "net of idle baseline"
+
+
+def test_the_rejection_is_recorded_when_the_session_is_measured(patched, tmp_path):
+    """The note has to travel with the JSON, not just the terminal."""
+    # 1 W session against a 5 W "idle" baseline
+    baseline = BaselineResult(
+        duration_s=30.0, mean_w=5.0, std_w=0.1, joules=150.0, n_samples=30,
+        min_w=4.9, max_w=5.1, backend="canned", docker_running=True,
+        machine=MachineInfo(chip="test"))
+    res = run(CannedBackend(watts=1.0, n=10), tmp_path, baseline=baseline)
+    assert not res.baseline_usable()
+    assert any("idle baseline" in n and "rejected" in n for n in res.notes)
+    # the recorded net stays in the JSON as captured; it is the accessors and
+    # the report that refuse to present it
+    assert res.net_joules is not None and res.net_joules < 0

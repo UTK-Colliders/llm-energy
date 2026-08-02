@@ -101,6 +101,19 @@ def measure_session(command: list[str],
     if baseline is not None and power_ok:
         baseline_mean_w = baseline.mean_w
         net_j = gross_j - baseline.mean_w * wall_time_s
+        if baseline.mean_w >= mean_w:
+            # An idle floor above the session's own mean draw is not an idle
+            # floor. Subtracting it turns every derived term negative, and a
+            # negative joule reads as a number rather than as the broken
+            # instrument it is. Say so here so the note travels with the JSON.
+            notes.append(
+                f"the idle baseline ({baseline.mean_w:.2f} W) is at or above "
+                f"this session's mean power ({mean_w:.2f} W), so it was "
+                "captured while the machine was busier than the session it is "
+                "meant to correct — the baseline is rejected and the derived "
+                "figures are reported gross. Re-record it with the machine "
+                "settled (a longer --baseline-seconds averages out transient "
+                "load), or re-run with --skip-baseline once a clean one exists")
 
     # Attribute energy to the containers the agent ran. Wall-clock event times
     # map onto the trace through the session's own start, which was captured

@@ -541,8 +541,17 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
         rows.append(("Session energy (measured, gross)",
                      f"{sp.gross_joules:.1f} J ({_wh(sp.gross_joules):.3f} Wh)"))
         if sp.net_joules is not None:
-            rows.append(("Session energy (net of idle)",
-                         f"{sp.net_joules:.1f} J ({_wh(sp.net_joules):.3f} Wh)"))
+            if sp.baseline_usable():
+                rows.append(("Session energy (net of idle)",
+                             f"{sp.net_joules:.1f} J "
+                             f"({_wh(sp.net_joules):.3f} Wh)"))
+            else:
+                # Printing "-162.9 J" here invites someone to use it. The
+                # baseline is the broken part, not the session.
+                rows.append(("Session energy (net of idle)",
+                             f"unusable — idle baseline "
+                             f"{sp.baseline_mean_w:.2f} W exceeds the "
+                             f"session's {sp.mean_power_w:.2f} W"))
         # Both terms net of idle where a baseline exists: an agent session is
         # mostly network wait, so gross is dominated by draw the machine would
         # have had anyway and would overstate the agent's cost several-fold.
@@ -556,10 +565,12 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
                          f"{len(sp.containers)} container(s)"))
         if outside is not None:
             total = (compute or 0.0) + outside
-            share = 100.0 * outside / total if total > 0 else float("nan")
+            # A share is only meaningful when both parts are positive and sum
+            # to the whole. "nan%" was the old way of saying they did not.
+            share = (f", {100.0 * outside / total:.1f}% of the session"
+                     if total > 0 and outside >= 0 else "")
             rows.append((f"E_coord,local (outside containers, {basis})",
-                         f"{outside:.1f} J ({_wh(outside):.3f} Wh), "
-                         f"{share:.1f}% of the session"))
+                         f"{outside:.1f} J ({_wh(outside):.3f} Wh){share}"))
     rows += [
         ("LLM model(s)", ", ".join(m.model for m in se.usage.per_model)),
         ("LLM tokens (in/out/cache-create/cache-read)",
@@ -577,7 +588,15 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
         rows.append(("Deliverables", "not checked"))
         return rows
 
-    rows.append(("Deliverables", "MET" if graded.ok else "NOT MET"))
+    if not graded.ok and any(c.still_running for c in sp.containers):
+        # "the agent got it wrong" and "the agent ran out of session while the
+        # generator was still going" are different results, and the second one
+        # says nothing about the model. Do not let the verdict imply the first.
+        rows.append(("Deliverables",
+                     "NOT MET — but a container was still running at the end, "
+                     "so the run was cut off rather than finished wrong"))
+    else:
+        rows.append(("Deliverables", "MET" if graded.ok else "NOT MET"))
     ev = graded.events
     if ev is None:
         rows.append(("  events", "missing"))

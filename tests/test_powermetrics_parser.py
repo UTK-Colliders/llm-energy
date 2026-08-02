@@ -70,4 +70,23 @@ def test_integration_window_trimming():
     trace = PowerTrace(backend="test", samples=samples)
     assert trace.integrate_joules() == pytest.approx(6.0)
     assert trace.integrate_joules(t_start=1.0, t_end=2.0) == pytest.approx(2.0)
-    assert trace.integrate_joules(t_start=0.9, t_end=3.1) == pytest.approx(5.0)
+    # partial samples count for the fraction that overlaps: 0.1 s of the first
+    # sample, then both of the others, and t_end clips to the trace's 3.0 s end
+    assert trace.integrate_joules(t_start=0.9, t_end=3.1) == pytest.approx(5.1)
+
+
+def test_a_window_shorter_than_a_sample_gets_its_share_not_the_whole_sample():
+    # The failure this replaces: a 0.4 s container whose window happened to
+    # straddle a sample midpoint was handed the entire 1 s sample, and the
+    # report showed 20.7 J at 264 W over "0 s". Its neighbour, straddling no
+    # midpoint, was handed nothing and reported a clean 0.0 J.
+    trace = PowerTrace(backend="test", samples=[
+        PowerSample(t_rel_s=0.0, elapsed_s=1.0, combined_mw=20_000),
+        PowerSample(t_rel_s=1.0, elapsed_s=1.0, combined_mw=20_000),
+    ])
+    straddles_midpoint = trace.integrate_joules(t_start=0.3, t_end=0.7)
+    straddles_boundary = trace.integrate_joules(t_start=0.8, t_end=1.2)
+    assert straddles_midpoint == pytest.approx(8.0)   # 0.4 s x 20 W
+    assert straddles_boundary == pytest.approx(8.0)   # same duration, same energy
+    for e, wall in ((straddles_midpoint, 0.4), (straddles_boundary, 0.4)):
+        assert e / wall == pytest.approx(20.0), "mean power must stay physical"

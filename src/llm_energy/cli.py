@@ -142,7 +142,7 @@ def doctor(task_name: str, task_dir: Path, coefficients: Path):
               show_default=True)
 def baseline(duration: float, interval_ms: int, backend_name: str | None, out: Path):
     """Measure idle power. Quiesce the machine; leave the Docker VM running."""
-    from llm_energy.baseline import measure_baseline
+    from llm_energy.baseline import baseline_warnings, measure_baseline
     from llm_energy.power import get_backend
     from llm_energy.schemas import write_result
 
@@ -156,6 +156,12 @@ def baseline(duration: float, interval_ms: int, backend_name: str | None, out: P
     if not result.docker_running:
         console.print("[yellow]warning: docker is not running — the task-time "
                       "baseline should include the idle Docker VM[/yellow]")
+    # A baseline is subtracted from every later measurement, so a contaminated
+    # one poisons runs made hours afterwards — and it does so invisibly, by
+    # shaving watts off a real result rather than by failing. Complain now,
+    # while re-recording it costs 30 seconds.
+    for warning in baseline_warnings(result, out):
+        console.print(f"[yellow]warning: {warning}[/yellow]")
     path = write_result(result, out / f"baseline-{_ts()}.json")
     console.print(f"mean {result.mean_w:.2f} W (std {result.std_w:.2f}, "
                   f"n={result.n_samples}) -> {path}")
@@ -516,10 +522,18 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
         console.print(f"  [dim]event content sha256: "
                       f"{graded.events.events_sha256[:16]}[/dim]")
     if graded.peak is not None:
-        show("mass peak:", graded.peak)
+        if graded.peak.exists:
+            show("mass peak:", graded.peak)
+        else:
+            # spec.histogram_path is where the brief suggested the file go, not
+            # a file that is there. Printing it as the graded path claimed a
+            # histogram had been examined when the search found none.
+            console.print(f"[red]FAIL[/red]  mass peak — no histogram JSON "
+                          f"anywhere under {workspace}")
     if graded.plot_missing:
-        console.print(f"[red]FAIL[/red]  plot — nothing at "
-                      f"{spec.plot_path}")
+        console.print(f"[red]FAIL[/red]  plot — no plot anywhere under "
+                      f"{workspace} (the brief asked for one; "
+                      f"{spec.plot_path} was the suggested name)")
 
     if graded.ok:
         console.print("[green]deliverables meet the specification[/green]")

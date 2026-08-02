@@ -264,7 +264,12 @@ def test_a_missing_histogram_is_reported_not_silently_skipped(tmp_path):
     (tmp_path / "top_mass_hist.json").unlink()
     g = grade_workspace(open_spec(), tmp_path)
     assert not g.ok
-    assert any("could not be checked" in n for n in g.notes)
+    assert g.peak is not None and not g.peak.exists
+    # The report keeps the *suggested* path so callers can name it, but a
+    # caller that prints it as the graded file claims a histogram was examined
+    # when the search found none — which is how one run reported both "no
+    # histogram JSON anywhere" and "mass peak: .../top_mass_hist.json".
+    assert not Path(g.peak.path).exists()
 
 
 def test_events_found_under_another_name_are_still_graded(tmp_path):

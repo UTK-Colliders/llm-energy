@@ -501,11 +501,10 @@ def grade_workspace(spec: "OpenSpec", workspace: Path,
                 graded.notes.append(
                     f"histogram found at {found.relative_to(workspace)} rather "
                     f"than {spec.histogram_path}")
+        # When the search comes up empty this keeps the suggested path as the
+        # report's `path`, which is a name the run never wrote. Callers must
+        # check `.exists` before showing it as the file that was graded.
         graded.peak = spec.verify_peak(hist)
-        if not hist.exists():
-            graded.notes.append(
-                "no histogram JSON anywhere in the workspace — the top mass "
-                "peak could not be checked, only the plot's existence")
 
     if spec.plot_path:
         plot = workspace / spec.plot_path

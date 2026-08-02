@@ -303,3 +303,35 @@ def test_clock_skew_is_flagged_rather_than_reading_as_a_clean_split():
     assert leak is not None
     assert "outside every phase window" in leak and "clock" in leak
     assert "**Warning:**" in render_markdown(Trial("run", t, make_session_result()))
+
+
+def test_a_cut_off_run_is_not_reported_as_a_wrong_answer():
+    """A container still up at session end means the run never finished.
+
+    "the agent got the physics wrong" and "the agent ran out of session while
+    MadGraph was still going" are different results, and only the first says
+    anything about the model.
+    """
+    from llm_energy.deliverable import Check, DeliverableReport, GradedWorkspace
+    from llm_energy.report import open_rows
+    from llm_energy.schemas import ObservedContainer
+
+    sp = make_session_power()
+    sp.container_joules = 2602.9
+    sp.container_wall_s = 131.0
+    sp.containers = [ObservedContainer(
+        container_id="8fc337d5a607", image="mg5amc", started_at="", ended_at="",
+        wall_time_s=126.0, gross_joules=2477.8, mean_power_w=19.72,
+        still_running=True)]
+    graded = GradedWorkspace(events=DeliverableReport(
+        path="events.lhe", exists=True,
+        checks=[Check(name="event count", ok=False, detail="0 events")]))
+    assert not graded.ok
+
+    verdict = dict(open_rows(sp, make_session_result(), graded))["Deliverables"]
+    assert "cut off" in verdict
+
+    # the same failure with every container finished is a genuine wrong answer
+    sp.containers[0].still_running = False
+    assert dict(open_rows(sp, make_session_result(), graded)
+                )["Deliverables"] == "NOT MET"

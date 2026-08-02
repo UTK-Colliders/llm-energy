@@ -37,6 +37,44 @@ def measure_baseline(backend, duration_s: float, interval_ms: int,
     )
 
 
+# An idle machine draws a narrow, flat band. These are the two ways a capture
+# betrays that it was not idle, both deliberately loose: the point is to catch
+# "you took this while Spotlight was indexing", not to police a few percent.
+UNSETTLED_SPREAD = 0.20   # std as a fraction of the mean
+UNSETTLED_DRIFT = 0.25    # rise over the previous baseline for this machine
+
+
+def baseline_warnings(result: BaselineResult, results_dir: Path) -> list[str]:
+    """Reasons to distrust a freshly captured baseline.
+
+    Every later measurement subtracts this number, so a contaminated baseline
+    does not announce itself — it silently deflates real results, and if it is
+    bad enough it drives them negative.
+    """
+    warnings: list[str] = []
+    if result.mean_w > 0 and result.std_w > UNSETTLED_SPREAD * result.mean_w:
+        warnings.append(
+            f"the machine was not settled: {result.mean_w:.2f} W mean but "
+            f"{result.std_w:.2f} W std over {result.min_w:.2f}-{result.max_w:.2f} W. "
+            "A short baseline cannot average that out — wait for the machine "
+            "to go quiet and re-record, or use a longer --duration")
+
+    previous = find_latest_baseline(results_dir, result.machine)
+    if previous is not None:
+        from llm_energy.schemas import load_baseline
+        try:
+            prev = load_baseline(previous)
+        except (ValueError, KeyError, TypeError):
+            return warnings
+        if prev.mean_w > 0 and result.mean_w > (1 + UNSETTLED_DRIFT) * prev.mean_w:
+            warnings.append(
+                f"this baseline ({result.mean_w:.2f} W) is "
+                f"{100 * (result.mean_w / prev.mean_w - 1):.0f}% above the last "
+                f"one for this machine ({prev.mean_w:.2f} W, {previous.name}) — "
+                "something was running during the capture")
+    return warnings
+
+
 def find_latest_baseline(results_dir: Path, machine) -> Path | None:
     """Newest baseline JSON from the same machine (chip + hostname match)."""
     from llm_energy.schemas import load_baseline

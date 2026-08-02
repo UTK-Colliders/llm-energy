@@ -52,17 +52,28 @@ class PowerTrace:
     combined_source: str = ""   # "combined-line" | "component-sum" | backend-specific
 
     def integrate_joules(self, t_start: float | None = None, t_end: float | None = None) -> float:
-        """Rectangle-rule integral over samples whose window midpoint lies in
-        [t_start, t_end] (trace-relative seconds). Windows tile the trace, so
-        with no bounds this is exact given the samples."""
+        """Rectangle-rule integral over [t_start, t_end] (trace-relative
+        seconds). Each sample is constant power over its own window, and a
+        sample straddling a bound contributes only the overlapping fraction.
+        Windows tile the trace, so with no bounds this is exact given the
+        samples.
+
+        Attribution used to be all-or-nothing on the sample midpoint, which
+        breaks down once a window is comparable to the sampling interval: a
+        0.4 s container either swallowed a whole 1 s sample — reporting 21 J
+        at 264 W — or missed one and reported a clean zero. Clipping keeps
+        short windows proportionate and still sums to the same total.
+        """
         total = 0.0
         for s in self.samples:
-            mid = s.t_rel_s + s.elapsed_s / 2.0
-            if t_start is not None and mid < t_start:
+            lo, hi = s.t_rel_s, s.t_rel_s + s.elapsed_s
+            if t_start is not None:
+                lo = max(lo, t_start)
+            if t_end is not None:
+                hi = min(hi, t_end)
+            if hi <= lo:
                 continue
-            if t_end is not None and mid > t_end:
-                continue
-            total += (s.combined_mw / 1000.0) * s.elapsed_s
+            total += (s.combined_mw / 1000.0) * (hi - lo)
         return total
 
     def duration_s(self) -> float:
@@ -210,18 +221,32 @@ class SessionPowerResult:
     created_at: str = field(default_factory=now_iso)
     kind: str = "session-power"
 
+    def baseline_usable(self) -> bool:
+        """Whether the idle baseline can be subtracted from this session.
+
+        A baseline at or above the session's own mean power is not an idle
+        floor: it was captured while the machine was busier than the session
+        it is meant to correct. Subtracting it yields negative "energy", which
+        is not a small correction pointing the wrong way but a sign the
+        measurement is unusable.
+        """
+        if not self.power_ok or self.baseline_mean_w is None:
+            return False
+        return self.baseline_mean_w < self.mean_power_w
+
     def outside_container_joules(self, net: bool = True) -> float | None:
         """Energy spent outside any container — the agent thinking and reading.
 
         Net of the idle baseline by default. An agent session is mostly spent
         waiting on the network, so gross would be dominated by draw the machine
         would have had anyway; the marginal cost of the agent working is the
-        quantity of interest. Falls back to gross when no baseline was applied.
+        quantity of interest. Falls back to gross when no baseline was applied
+        or when the one on file is not usable.
         """
         if not self.power_ok or self.container_joules is None:
             return None
         outside = self.gross_joules - self.container_joules
-        if not net or self.baseline_mean_w is None:
+        if not net or not self.baseline_usable():
             return outside
         idle_s = self.wall_time_s - (self.container_wall_s or 0.0)
         return outside - self.baseline_mean_w * idle_s
@@ -230,14 +255,17 @@ class SessionPowerResult:
         """Container energy net of the idle baseline over their windows."""
         if not self.power_ok or self.container_joules is None:
             return None
-        if self.baseline_mean_w is None:
+        if not self.baseline_usable():
             return self.container_joules
         return (self.container_joules
                 - self.baseline_mean_w * (self.container_wall_s or 0.0))
 
     def energy_basis(self) -> str:
-        return ("net of idle baseline" if self.baseline_mean_w is not None
-                else "gross")
+        if self.baseline_usable():
+            return "net of idle baseline"
+        if self.baseline_mean_w is not None and self.power_ok:
+            return "gross — idle baseline rejected"
+        return "gross"
 
 
 @dataclass
