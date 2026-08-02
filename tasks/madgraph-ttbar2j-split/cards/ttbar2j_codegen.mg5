@@ -1,12 +1,12 @@
-# Phase 1 of madgraph-ttbar-split: matrix-element code generation only.
+# Phase 1 of madgraph-ttbar2j-split: matrix-element code generation only.
 #
 # `output` writes the process directory as Fortran source and stops. The
 # Fortran build is then driven explicitly by the phase's make step, so that
 # all compilation lands inside this measured window rather than inside the
 # event-generation one (which is what `launch` would do).
 #
-# Physics must stay identical to tasks/madgraph-ttbar-lhe — only the
+# Physics must stay identical to tasks/madgraph-ttbar2j-lhe — only the
 # measurement boundary differs between the two tasks.
 set automatic_html_opening False
-generate p p > t t~
+generate p p > t t~ j j
 output /work/proc_pp_ttbar

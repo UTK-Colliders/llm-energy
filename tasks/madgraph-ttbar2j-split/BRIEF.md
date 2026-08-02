@@ -1,4 +1,4 @@
-# Task brief: madgraph-ttbar-split
+# Task brief: madgraph-ttbar2j-split
 
 You are the coordinating agent for a measured run. Everything you do from here
 until you finish is the experiment: your tokens are counted, and this machine's
@@ -9,12 +9,12 @@ wrong events is a failed measurement, not a cheap one.
 
 ## The job
 
-Same physics as `madgraph-ttbar-lhe`, run in two separately measured phases so
+Same physics as `madgraph-ttbar2j-lhe`, run in two separately measured phases so
 that compilation and event generation get their own energy figures:
 
 | Property | Required value |
 |---|---|
-| Process | `p p > t t~` |
+| Process | `p p > t t~ j j` (ttbar + 2 jets) |
 | Order | LO |
 | Beam energy | 6800 GeV per beam (√s = 13.6 TeV) |
 | Events | 10,000, unweighted |
@@ -37,7 +37,7 @@ Treat them as the specification, not as something to improve.
 2. Run the task:
 
    ```sh
-   uv run llm-energy run-task madgraph-ttbar-split
+   uv run llm-energy run-task madgraph-ttbar2j-split
    ```
 
    This takes a while. It prints a line per phase — energy, share, and how

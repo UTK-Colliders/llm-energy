@@ -10,7 +10,7 @@ def write_task(dir_, name, session_id, started_at="2026-08-01T10:00:00+00:00",
     p = dir_ / f"task-{name}.json"
     p.write_text(json.dumps({
         "kind": kind,
-        "task_name": "madgraph-ttbar-lhe",
+        "task_name": "madgraph-ttbar2j-lhe",
         "coordinating_session_id": session_id,
         "started_at": started_at,
     }))

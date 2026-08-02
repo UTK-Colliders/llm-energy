@@ -68,7 +68,7 @@ def main():
 # --- doctor -----------------------------------------------------------------
 
 @main.command()
-@click.option("--task", "task_name", default="madgraph-ttbar-lhe", show_default=True)
+@click.option("--task", "task_name", default="madgraph-ttbar2j-lhe", show_default=True)
 @click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
               show_default=True)
 @click.option("--coefficients", type=click.Path(path_type=Path), default=DEFAULT_COEFFS,
@@ -259,7 +259,7 @@ def measure_session_cmd(command: tuple[str, ...], baseline_arg: str,
     Sessions started during the window are linked automatically.
 
     Example:
-      llm-energy measure-session -- claude "do the madgraph-ttbar-lhe task"
+      llm-energy measure-session -- claude "do the madgraph-ttbar2j-lhe task"
     """
     from llm_energy.power import get_backend
     from llm_energy.schemas import write_result
@@ -473,7 +473,7 @@ def find_task_result(session_power: Path, out: Path, show_all: bool):
 
 @main.command("verify-deliverable")
 @click.argument("workspace", type=click.Path(path_type=Path, exists=True))
-@click.option("--task", "task_name", default="madgraph-ttbar-open",
+@click.option("--task", "task_name", default="madgraph-ttbar2j-open",
               show_default=True, help="open task whose spec.yaml grades this")
 @click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
               show_default=True)
@@ -532,7 +532,7 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
 @click.option("--run", "runs", multiple=True, required=True, nargs=2,
               metavar="LABEL WORKSPACE",
               help="repeat for each run being compared")
-@click.option("--task", "task_name", default="madgraph-ttbar-open",
+@click.option("--task", "task_name", default="madgraph-ttbar2j-open",
               show_default=True)
 @click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
               show_default=True)
@@ -710,7 +710,7 @@ def breakdown_cmd(label: str, task_result: Path | None,
 @click.argument("session_result", type=click.Path(path_type=Path, exists=True))
 @click.option("--workspace", type=click.Path(path_type=Path), default=None,
               help="grade the deliverable in this workspace too")
-@click.option("--task", "task_name", default="madgraph-ttbar-open",
+@click.option("--task", "task_name", default="madgraph-ttbar2j-open",
               show_default=True)
 @click.option("--task-dir", type=click.Path(path_type=Path), default=DEFAULT_TASKS,
               show_default=True)

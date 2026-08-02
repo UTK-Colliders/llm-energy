@@ -48,10 +48,41 @@ class DeliverableReport:
         return [c for c in self.checks if not c.ok]
 
 
+# MadGraph's default `j` is g and the four light flavours; b appears once the
+# agent chooses a 5-flavour scheme. Both are defensible, so both pass.
+DEFAULT_JET_PDGS = (21, 1, 2, 3, 4, 5, -1, -2, -3, -4, -5)
+
+
+def check_event_topology(pdgs: tuple[int, ...],
+                         required: tuple[int, ...],
+                         n_jets: int,
+                         jet_pdgs: tuple[int, ...]) -> str | None:
+    """None if the final state is the right topology, else what is wrong.
+
+    An exact-set match cannot express `t t~ + 2 jets`: the jet flavours differ
+    event by event (gg, gu, ud~, ...), so what must hold is one top, one
+    antitop, and exactly n_jets more partons of any allowed flavour.
+    """
+    remaining = list(pdgs)
+    for want in required:
+        if want not in remaining:
+            return f"no {want} in final state {tuple(sorted(pdgs))}"
+        remaining.remove(want)
+    if len(remaining) != n_jets:
+        return (f"{len(remaining)} extra particles, wanted {n_jets} "
+                f"(final state {tuple(sorted(pdgs))})")
+    stray = [p for p in remaining if p not in jet_pdgs]
+    if stray:
+        return f"non-parton {tuple(sorted(stray))} among the extra particles"
+    return None
+
+
 def verify_lhe(path: Path,
                nevents: int,
                beam_energy_gev: float,
                final_state: tuple[int, ...] = (-6, 6),
+               n_extra_jets: int = 0,
+               jet_pdgs: tuple[int, ...] = DEFAULT_JET_PDGS,
                beam_pdg: tuple[int, int] = (2212, 2212),
                energy_rtol: float = 1e-6,
                max_events_checked: int | None = None) -> DeliverableReport:
@@ -78,7 +109,7 @@ def verify_lhe(path: Path,
 
     wanted_fs = tuple(sorted(final_state))
     n = 0
-    bad_fs: tuple | None = None
+    bad_fs: str | None = None
     unparsed = 0
     for ev in iter_events(path):
         n += 1
@@ -86,16 +117,21 @@ def verify_lhe(path: Path,
             got = final_state_pdgs(ev)
             if got is None:
                 unparsed += 1
-            elif got != wanted_fs and bad_fs is None:
-                bad_fs = got
+            else:
+                problem = check_event_topology(got, wanted_fs, n_extra_jets,
+                                               tuple(jet_pdgs))
+                if problem and bad_fs is None:
+                    bad_fs = f"event {n}: {problem}"
     report.n_events = n
 
+    wanted_desc = " + ".join(
+        [str(wanted_fs)] + ([f"{n_extra_jets} jets"] if n_extra_jets else []))
     check("event count", n == nevents, f"{n} events, wanted {nevents}")
     if unparsed:
         check("event records parse", False, f"{unparsed} unparsable event(s)")
     check("final state", bad_fs is None,
-          f"all events {wanted_fs}" if bad_fs is None
-          else f"found an event with final state {bad_fs}, wanted {wanted_fs}")
+          f"every event is {wanted_desc}" if bad_fs is None
+          else f"wanted {wanted_desc}; {bad_fs}")
 
     if n:
         report.n_events, report.events_sha256 = event_summary(path)
@@ -121,6 +157,40 @@ class MassPeakReport:
     @property
     def failures(self) -> list[Check]:
         return [c for c in self.checks if not c.ok]
+
+
+# A casually-worded brief does not dictate key names, so accept the spellings
+# a physicist would reach for, and fall back to structure: in a histogram one
+# array has exactly one more entry than the other.
+EDGE_KEYS = ("bin_edges_gev", "bin_edges", "edges", "bins", "x")
+COUNT_KEYS = ("counts", "values", "y", "n", "entries")
+
+
+def _numeric_list(v):
+    if not isinstance(v, list) or not v:
+        return None
+    try:
+        return [float(x) for x in v]
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_histogram(data: dict):
+    """(edges, counts) from a histogram JSON, however it was spelled."""
+    if not isinstance(data, dict):
+        return None, None
+    arrays = {k: a for k, a in ((k, _numeric_list(v)) for k, v in data.items())
+              if a is not None}
+    for ek in EDGE_KEYS:
+        for ck in COUNT_KEYS:
+            if ek in arrays and ck in arrays and len(arrays[ek]) == len(arrays[ck]) + 1:
+                return arrays[ek], arrays[ck]
+    # structural fallback: any two arrays in the N+1 / N relationship
+    for ek, e in arrays.items():
+        for ck, c in arrays.items():
+            if ek != ck and len(e) == len(c) + 1:
+                return e, c
+    return None, None
 
 
 def histogram_fingerprint(edges: list[float], counts: list[float]) -> str:
@@ -193,10 +263,11 @@ def verify_mass_peak(path: Path,
         check("histogram parses", False, "not a JSON object")
         return report
 
-    edges, counts = data.get("bin_edges_gev"), data.get("counts")
-    if not isinstance(edges, list) or not isinstance(counts, list):
+    edges, counts = extract_histogram(data)
+    if edges is None:
         check("histogram parses", False,
-              "needs 'bin_edges_gev' and 'counts' arrays")
+              "no pair of arrays looks like bin edges and counts (one array "
+              "must have exactly one more entry than the other)")
         return report
     try:
         edges = [float(x) for x in edges]
@@ -268,6 +339,8 @@ class OpenSpec:
             nevents=int(r["nevents"]),
             beam_energy_gev=float(r["beam_energy_gev"]),
             final_state=tuple(r.get("final_state_pdg", (-6, 6))),
+            n_extra_jets=int(r.get("extra_jets", 0)),
+            jet_pdgs=tuple(r.get("jet_pdg", DEFAULT_JET_PDGS)),
             beam_pdg=tuple(r.get("beam_pdg", (2212, 2212))),
         )
 
@@ -300,6 +373,29 @@ def load_open_spec(task_dir: Path) -> OpenSpec:
     return OpenSpec(name=data["name"],
                     deliverables={k: str(v) for k, v in deliverables.items()},
                     requirements=data["requirements"])
+
+
+def find_histogram(root: Path) -> Path | None:
+    """The JSON under `root` that parses as a histogram, largest first."""
+    for p in sorted((q for q in root.glob("**/*.json") if q.is_file()),
+                    key=lambda q: q.stat().st_size, reverse=True):
+        try:
+            edges, counts = extract_histogram(json.loads(p.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if edges is not None:
+            return p
+    return None
+
+
+def find_plot(root: Path) -> Path | None:
+    """Any figure the agent left behind."""
+    for pat in ("**/*.pdf", "**/*.png", "**/*.svg", "**/*.jpg"):
+        found = sorted((p for p in root.glob(pat) if p.is_file()),
+                       key=lambda p: p.stat().st_size, reverse=True)
+        if found:
+            return found[0]
+    return None
 
 
 def find_deliverable(root: Path, patterns: tuple[str, ...] =
@@ -354,16 +450,36 @@ def grade_workspace(spec: "OpenSpec", workspace: Path,
                 f"{events.relative_to(workspace)} instead")
     graded.events = spec.verify(events) if events.exists() else None
 
+    # The brief asks for files "somewhere in this directory" rather than at
+    # fixed paths, so look for the shape of each artefact and fall back to a
+    # search. A histogram under another name is a naming choice; a missing one
+    # is a missing result.
     if spec.histogram_path:
         hist = workspace / spec.histogram_path
+        if not hist.exists():
+            found = find_histogram(workspace)
+            if found is not None:
+                hist = found
+                graded.notes.append(
+                    f"histogram found at {found.relative_to(workspace)} rather "
+                    f"than {spec.histogram_path}")
         graded.peak = spec.verify_peak(hist)
         if not hist.exists():
             graded.notes.append(
-                f"no histogram at {spec.histogram_path} — the top mass peak "
-                "could not be checked, only the plot's existence")
+                "no histogram JSON anywhere in the workspace — the top mass "
+                "peak could not be checked, only the plot's existence")
 
     if spec.plot_path:
-        graded.plot_missing = not (workspace / spec.plot_path).exists()
+        plot = workspace / spec.plot_path
+        if not plot.exists():
+            found = find_plot(workspace)
+            if found is not None:
+                graded.notes.append(
+                    f"plot found at {found.relative_to(workspace)} rather than "
+                    f"{spec.plot_path}")
+            graded.plot_missing = found is None
+        else:
+            graded.plot_missing = False
 
     return graded
 

@@ -10,7 +10,7 @@
 # the task container's own energy nested inside.
 #
 # Usage:  scripts/measure-run.sh [options]
-#   --task NAME          task under tasks/ (default: madgraph-ttbar-lhe)
+#   --task NAME          task under tasks/ (default: madgraph-ttbar2j-lhe)
 #   --model NAME         pass --model to claude (for cross-model comparison)
 #   --label NAME         label for the report (default: the model, else "run")
 #   --interactive        supervise the session instead of running headless
@@ -22,7 +22,7 @@
 #
 set -euo pipefail
 
-TASK=madgraph-ttbar-lhe
+TASK=madgraph-ttbar2j-lhe
 MODEL=""
 LABEL=""
 INTERACTIVE=0
@@ -59,7 +59,7 @@ command -v claude >/dev/null || die "the 'claude' CLI is not on PATH"
 # An "open" task states the goal and nothing else: the agent works out the
 # method itself. That only measures anything if it cannot read the answer, so
 # an open run happens in a scratch workspace *outside* this repo — where
-# tasks/madgraph-ttbar-lhe/cards/ttbar_lhe.mg5 is a complete worked solution
+# tasks/madgraph-ttbar2j-lhe/cards/ttbar2j_lhe.mg5 is a complete worked solution
 # that any competent agent would rightly find and use.
 OPEN=0
 [ -f "tasks/$TASK/spec.yaml" ] && OPEN=1

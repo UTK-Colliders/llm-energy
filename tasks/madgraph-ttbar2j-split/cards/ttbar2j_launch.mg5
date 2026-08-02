@@ -1,7 +1,7 @@
-# Phase 2 of madgraph-ttbar-split: event generation from the pre-built
+# Phase 2 of madgraph-ttbar2j-split: event generation from the pre-built
 # process directory produced by phase 1.
 #
-# The run-card values below are identical to tasks/madgraph-ttbar-lhe's, seed
+# The run-card values below are identical to tasks/madgraph-ttbar2j-lhe's, seed
 # included, so the two tasks are generating the same physics; only where the
 # measurement boundary falls differs. Whether the events come out
 # byte-identical across the two is an empirical question — check it with

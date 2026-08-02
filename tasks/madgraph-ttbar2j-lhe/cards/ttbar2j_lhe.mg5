@@ -1,4 +1,4 @@
-# 10,000 pp -> t t~ events at 13.6 TeV, LO, unweighted LHE output.
+# 10,000 pp -> t t~ j j events at 13.6 TeV, LO, unweighted LHE output.
 #
 # Prompt flow in MG5 3.5.x script mode: the first `done` dismisses the
 # shower/detector/madspin switch menu after `launch` (all off at LO); the
@@ -9,7 +9,7 @@
 # iseed is pinned so runs coordinated by different LLMs (same image) must
 # produce identical events — checked by `llm-energy verify-events`.
 set automatic_html_opening False
-generate p p > t t~
+generate p p > t t~ j j
 output /work/proc_pp_ttbar
 launch /work/proc_pp_ttbar
 done

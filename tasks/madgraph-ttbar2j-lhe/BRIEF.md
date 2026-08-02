@@ -1,4 +1,4 @@
-# Task brief: madgraph-ttbar-lhe
+# Task brief: madgraph-ttbar2j-lhe
 
 You are the coordinating agent for a measured run. Everything you do from here
 until you finish is the experiment: your tokens are counted, and this machine's
@@ -14,7 +14,7 @@ correct:
 
 | Property | Required value |
 |---|---|
-| Process | `p p > t t~` |
+| Process | `p p > t t~ j j` (ttbar + 2 jets) |
 | Order | LO |
 | Beam energy | 6800 GeV per beam (√s = 13.6 TeV) |
 | Events | 10,000, unweighted |
@@ -22,18 +22,18 @@ correct:
 | Output | LHE, gzipped |
 
 The task definition in this directory already encodes all of it —
-`task.yaml` for the container and `cards/ttbar_lhe.mg5` for the physics. Treat
+`task.yaml` for the container and `cards/ttbar2j_lhe.mg5` for the physics. Treat
 those as the specification, not as something to improve.
 
 ## Steps
 
-1. Get oriented: read `task.yaml` and `cards/ttbar_lhe.mg5` and check they
+1. Get oriented: read `task.yaml` and `cards/ttbar2j_lhe.mg5` and check they
    match the table above. If they don't, stop and tell the operator — do not
    edit them.
 2. Run the task:
 
    ```sh
-   uv run llm-energy run-task madgraph-ttbar-lhe
+   uv run llm-energy run-task madgraph-ttbar2j-lhe
    ```
 
    This takes a while. It prints gross/net Joules, the wall time, and the path

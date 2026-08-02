@@ -1,16 +1,16 @@
 schema_version: 1
-name: madgraph-ttbar-split
+name: madgraph-ttbar2j-split
 description: >
-  The madgraph-ttbar-lhe physics, split into separately measured phases:
+  The madgraph-ttbar2j-lhe physics, split into separately measured phases:
   Fortran code generation + compilation, then event generation. Same process,
   beams, event count, and seed — only the measurement boundary differs.
 
 images:
-  # The same image as madgraph-ttbar-lhe, built from that task's context so
+  # The same image as madgraph-ttbar2j-lhe, built from that task's context so
   # there is one Dockerfile and one image tag to keep in sync.
   native:
     build:
-      context: ../madgraph-ttbar-lhe
+      context: ../madgraph-ttbar2j-lhe
       dockerfile: Dockerfile
     tag: llm-energy/mg5amc:3.5.16
 
@@ -27,7 +27,7 @@ phases:
       - bash
       - -euc
       - |
-        mg5_aMC /cards/ttbar_codegen.mg5
+        mg5_aMC /cards/ttbar2j_codegen.mg5
         cd /work/proc_pp_ttbar/Source && make -j"$(nproc)"
         for d in /work/proc_pp_ttbar/SubProcesses/P*/; do
           (cd "$d" && make madevent)
@@ -38,7 +38,7 @@ phases:
   # all, which `build_artifacts_written` on the phase result confirms.
   - name: event-generation
     description: unweighted event generation from the pre-built process
-    command: ["mg5_aMC", "/cards/ttbar_launch.mg5"]
+    command: ["mg5_aMC", "/cards/ttbar2j_launch.mg5"]
 
 mounts:
   - source: cards
@@ -50,7 +50,9 @@ mounts:
 
 workdir: /work
 env: {}
-timeout_s: 7200
+# ttbar+2j is a much bigger calculation than ttbar: many more
+# subprocesses to generate and compile, and far slower unweighting.
+timeout_s: 28800
 
 expect:
   outputs:
@@ -59,11 +61,11 @@ expect:
       record_as: lhe_file
 
 metadata:
-  process: "p p > t t~"
+  process: "p p > t t~ j j"
   order: LO
   ebeam1_gev: 6800
   ebeam2_gev: 6800
   nevents: 10000
   iseed: 42
   mg5_version_native: "3.5.16"
-  split_of: madgraph-ttbar-lhe
+  split_of: madgraph-ttbar2j-lhe

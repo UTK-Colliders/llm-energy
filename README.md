@@ -4,7 +4,7 @@ How much energy does an LLM consume *coordinating* a HEP workflow task,
 compared to the energy of *running* the task itself?
 
 This tool measures both sides for tasks in a HEP research workflow. First
-benchmark: MadGraph5_aMC@NLO generating 10,000 `p p > t t~` events at
+benchmark: MadGraph5_aMC@NLO generating 10,000 `p p > t t~ j j` events at
 √s = 13.6 TeV (LO, unweighted LHE output) in a Docker container.
 
 A measured run is one command. It takes an idle baseline, starts a *fresh*
@@ -131,7 +131,7 @@ uv run pytest
 llm-energy doctor (platform: Darwin arm64)
   ok  power backend 'powermetrics' — parsed sample: combined=1421 mW (cpu=1180.0, gpu=190.0, ane=0.0), source=combined-line
   ok  docker daemon reachable
-  ok  task 'madgraph-ttbar-lhe' parses — default image: llm-energy/mg5amc:3.5.16
+  ok  task 'madgraph-ttbar2j-lhe' parses — default image: llm-energy/mg5amc:3.5.16
   --  image llm-energy/mg5amc:3.5.16 not built/pulled yet (run-task will handle it)
   ok  coefficients parse — default.yaml, pue=1.2, sha256=c37725a39568
 ```
@@ -142,7 +142,7 @@ It exits nonzero if any check fails, so it can gate a script. See
 ### 5. Pre-build the MadGraph image
 
 ```sh
-docker build -t llm-energy/mg5amc:3.5.16 tasks/madgraph-ttbar-lhe
+docker build -t llm-energy/mg5amc:3.5.16 tasks/madgraph-ttbar2j-lhe
 ```
 
 Takes 10–20 min and a few GB of disk. `run-task` builds it automatically if
@@ -203,7 +203,7 @@ behaviour, and both are part of the experiment:
   agent from running the operator's instruments (`baseline`,
   `analyze-session`, `report`, …). Without that boundary the session spends
   its tokens measuring itself.
-- [`tasks/madgraph-ttbar-lhe/BRIEF.md`](tasks/madgraph-ttbar-lhe/BRIEF.md) —
+- [`tasks/madgraph-ttbar2j-lhe/BRIEF.md`](tasks/madgraph-ttbar2j-lhe/BRIEF.md) —
   the job: the required physics, how to run it, how to verify the output, and
   what to do if it fails.
 
@@ -217,7 +217,7 @@ uv run llm-energy baseline --duration 120
 
 # 2. Run the agent under power measurement. Everything it does counts.
 uv run llm-energy measure-session -- \
-  claude -p "Read tasks/madgraph-ttbar-lhe/BRIEF.md and do the job it describes."
+  claude -p "Read tasks/madgraph-ttbar2j-lhe/BRIEF.md and do the job it describes."
 
 # 3. Pair the artifacts. The task result carries the id of the session that
 #    invoked it, so this is exact rather than newest-file guesswork.
@@ -239,7 +239,7 @@ uv run llm-energy analyze-session --session-id a1b2c3d4 --session-id e5f6a7b8
 ```
 
 Each run writes timestamped JSON to `results/`, plus a
-`results/run-madgraph-ttbar-lhe-<ts>/` directory holding the raw power trace,
+`results/run-madgraph-ttbar2j-lhe-<ts>/` directory holding the raw power trace,
 the container log, and the MadGraph output tree
 (`proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz`).
 
@@ -258,10 +258,10 @@ session instead, silently. Prefer `--for-task` whenever a task result exists.
 
 There are two kinds of task here, and they measure different things.
 
-| | `madgraph-ttbar-lhe` (pinned) | `madgraph-ttbar-open` |
+| | `madgraph-ttbar2j-lhe` (pinned) | `madgraph-ttbar2j-open` |
 |---|---|---|
-| The agent is given | the run card, the command, the steps | the required physics, nothing else |
-| The job | generate the events | generate → shower in Pythia8 → reconstruct the top mass peak |
+| The agent is given | the run card, the command, the steps | a dozen lines, the way a colleague would ask |
+| The job | generate the events | generate → shower in Pythia 8 → reconstruct the top mass peak |
 | The agent works out | nothing | how to get MadGraph and Pythia, what cards to write, how to reconstruct, how to plot |
 | Runs in | this repo | a scratch workspace outside it, containing only the brief |
 | Measures | the floor: executing a known solution | solving the problem |
@@ -271,15 +271,35 @@ The open task is a three-step physics job, not a one-liner. The agent has to
 work out the decay channel, the jet definition, and the combinatorics on its
 own — that reasoning is the thing being measured.
 
+The brief is deliberately short and informal, because a specification document
+is not what anyone would actually send a collaborator, and a measurement of an
+agent following a spec is not a measurement of an agent doing research. It
+reads in full:
+
+> Can you get me a ttbar+2 jets sample and show me the top mass peak?
+>
+> - 10k events, leading order, pp at 13.6 TeV, MadGraph
+> - shower it through Pythia 8
+> - seed 42 everywhere, so I can compare this against other people's runs
+> - leave the LHE, the plot, and the histogram numbers as JSON (bin edges and
+>   counts, in GeV) somewhere in this directory
+
+Everything the grader needs is implied by that, not dictated by it. Because
+the brief says *somewhere in this directory* rather than naming files, grading
+searches by shape: the LHE by extension, the histogram by finding a JSON whose
+arrays are in the N+1/N relationship a histogram has, the plot by being a
+figure. Key names are read forgivingly — `bin_edges_gev`/`counts`,
+`edges`/`values`, `x`/`y`, or anything else that fits structurally.
+
 The pinned task exists as a control. Its brief hands over
-`cards/ttbar_lhe.mg5`, which is the complete answer — including the
+`cards/ttbar2j_lhe.mg5`, which is the complete answer — including the
 non-obvious double `done` that MG5 3.5.x's prompt flow needs — so a session on
 it costs about what reading a runbook costs, and barely discriminates between
 models. Subtract it from an open run and what's left is the cost of figuring
 the problem out.
 
 ```sh
-scripts/measure-run.sh --task madgraph-ttbar-open --allow-all-tools
+scripts/measure-run.sh --task madgraph-ttbar2j-open --allow-all-tools
 ```
 
 A headless session has nobody to approve tool use, so every Bash and Write call
@@ -323,7 +343,7 @@ With the method unpinned, the output can be wrong, so a run's energy only
 means something next to a verdict:
 
 ```sh
-uv run llm-energy verify-deliverable ~/llm-energy-workspaces/madgraph-ttbar-open-<ts>
+uv run llm-energy verify-deliverable ~/llm-energy-workspaces/madgraph-ttbar2j-open-<ts>
 ```
 
 ```
@@ -354,19 +374,19 @@ purpose: this is a *reconstructed* mass, so jets, combinatorics and
 out-of-cone losses shift and broaden it. A peak outside that window means the
 reconstruction is wrong, not that the physics is.
 
-The grading key lives in `tasks/madgraph-ttbar-open/spec.yaml` and is never
+The grading key lives in `tasks/madgraph-ttbar2j-open/spec.yaml` and is never
 shown to the agent. A failed run is recorded, not discarded: a model that
 burns 300k tokens and produces a W peak where a top peak belongs is a result.
 
 ## Separating compilation from execution
 
-`madgraph-ttbar-lhe` measures one number for two different kinds of work: MG5's
+`madgraph-ttbar2j-lhe` measures one number for two different kinds of work: MG5's
 `launch` compiles the generated Fortran and *then* generates events.
-`madgraph-ttbar-split` runs the same physics — same process, beams, event
+`madgraph-ttbar2j-split` runs the same physics — same process, beams, event
 count, and seed — as two separately measured phases:
 
 ```sh
-uv run llm-energy run-task madgraph-ttbar-split
+uv run llm-energy run-task madgraph-ttbar2j-split
 ```
 
 ```
@@ -393,7 +413,7 @@ event-generation) — the compile/run split did not hold
 
 Whether the split task produces byte-identical events to the single-phase one
 is an empirical question — check it with `verify-events` rather than assuming
-it. `madgraph-ttbar-lhe` is untouched, so existing results stay comparable.
+it. `madgraph-ttbar2j-lhe` is untouched, so existing results stay comparable.
 
 ### Comparing runs exactly
 
@@ -403,8 +423,8 @@ can be compared event by event:
 
 ```sh
 uv run llm-energy compare-deliverables \
-  --run fable ~/llm-energy-workspaces/madgraph-ttbar-open-A \
-  --run haiku ~/llm-energy-workspaces/madgraph-ttbar-open-B
+  --run fable ~/llm-energy-workspaces/madgraph-ttbar2j-open-A \
+  --run haiku ~/llm-energy-workspaces/madgraph-ttbar2j-open-B
 ```
 
 ```
@@ -456,7 +476,7 @@ Phases share the run directory and run in order; a failed phase skips the rest.
 the portions can be read against each other:
 
 ```sh
-uv run llm-energy breakdown --label madgraph-ttbar-split \
+uv run llm-energy breakdown --label madgraph-ttbar2j-split \
   --task results/task-....json \
   --session-power results/power-session-....json \
   --session results/session-....json \
@@ -562,8 +582,8 @@ uv run llm-energy compare \
 
 # or directly on LHE files:
 uv run llm-energy verify-events \
-  results/run-madgraph-ttbar-lhe-A/proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz \
-  results/run-madgraph-ttbar-lhe-B/proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz
+  results/run-madgraph-ttbar2j-lhe-A/proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz \
+  results/run-madgraph-ttbar2j-lhe-B/proc_pp_ttbar/Events/run_01/unweighted_events.lhe.gz
 ```
 
 Event identity compares only `<event>` physics content (headers with

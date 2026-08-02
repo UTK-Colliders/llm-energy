@@ -42,7 +42,7 @@ yourself in a bare directory with a `BRIEF.md` and no repo around it, the
 brief is the whole of your instructions.
 
 This also means: **do not add worked solutions for open tasks to this repo.**
-`tasks/madgraph-ttbar-lhe/cards/ttbar_lhe.mg5` is a complete answer to the
+`tasks/madgraph-ttbar2j-lhe/cards/ttbar2j_lhe.mg5` is a complete answer to the
 MadGraph problem. Anything similar left where an open run could reach it turns
 the experiment back into a reading-comprehension test.
 

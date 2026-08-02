@@ -20,6 +20,11 @@ def event(final_state=((6, 1), (-6, 1)), incoming=((21, -1), (21, -1))):
     return "<event>\n" + "\n".join(lines) + "\n</event>"
 
 
+def event_2j(jets=((21, 1), (21, 1))):
+    """ttbar plus two partons — what the ttbar+2j spec expects."""
+    return event(final_state=((6, 1), (-6, 1)) + tuple(jets))
+
+
 def write_lhe(path, n=3, init=INIT, ev=None, gz=False):
     body = ("<LesHouchesEvents version=\"3.0\">\n<init>\n" + init + "\n</init>\n"
             + "\n".join((ev or event()) for _ in range(n))
@@ -203,12 +208,12 @@ def test_missing_histogram_is_not_ok(tmp_path):
 
 
 @pytest.mark.parametrize("body,why", [
-    ('{"bin_edges_gev": [1,2,3], "counts": [1,2,3]}', "one more edge"),
+    ('{"bin_edges_gev": [1,2,3], "counts": [1,2,3]}', "one more entry"),
     ('{"counts": [1,2]}', "arrays"),
     ('[1,2,3]', "JSON object"),
     ('not json at all', "Expecting"),
     ('{"bin_edges_gev": [3,2,1], "counts": [1,2]}', "increasing"),
-    ('{"bin_edges_gev": ["a","b"], "counts": ["c"]}', "non-numeric"),
+    ('{"bin_edges_gev": ["a","b"], "counts": ["c"]}', "one more entry"),
 ])
 def test_malformed_histograms_are_rejected_with_a_reason(tmp_path, body, why):
     (tmp_path / "h.json").write_text(body)
@@ -221,11 +226,12 @@ def test_malformed_histograms_are_rejected_with_a_reason(tmp_path, body, why):
 
 def open_spec():
     return load_open_spec(Path(__file__).parent.parent / "tasks"
-                          / "madgraph-ttbar-open")
+                          / "madgraph-ttbar2j-open")
 
 
 def complete_workspace(tmp_path, n_events=10000, peak=172.5):
-    write_lhe(tmp_path / "unweighted_events.lhe.gz", n=n_events, gz=True)
+    write_lhe(tmp_path / "unweighted_events.lhe.gz", n=n_events, gz=True,
+              ev=event_2j())
     gaussian_hist(tmp_path / "top_mass_hist.json", peak=peak)
     (tmp_path / "top_mass.pdf").write_bytes(b"%PDF-1.4 fake")
     return tmp_path
@@ -322,9 +328,11 @@ def graded_run(tmp_path, name, n_events=3, peak=172.5, version=None):
         with gzip.open(d / "unweighted_events.lhe.gz", "wt") as fh:
             fh.write("<LesHouchesEvents>\n<MGVersion>%s</MGVersion>\n<init>\n%s\n"
                      "</init>\n%s\n</LesHouchesEvents>\n"
-                     % (version, INIT, "\n".join(event() for _ in range(n_events))))
+                     % (version, INIT,
+                        "\n".join(event_2j() for _ in range(n_events))))
     else:
-        write_lhe(d / "unweighted_events.lhe.gz", n=n_events, gz=True)
+        write_lhe(d / "unweighted_events.lhe.gz", n=n_events, gz=True,
+                  ev=event_2j())
     gaussian_hist(d / "top_mass_hist.json", peak=peak)
     (d / "top_mass.pdf").write_bytes(b"%PDF-1.4")
     return name, grade_workspace(open_spec(), d)
@@ -380,3 +388,56 @@ def test_coincident_peaks_produce_no_spread_note(tmp_path):
                            graded_run(tmp_path, "b", peak=172.5)])
     assert comp.peak_spread_gev() == 0.0
     assert not any("span" in n for n in comp.notes)
+
+
+# --- ttbar + 2 jets -----------------------------------------------------------
+
+def test_the_spec_now_demands_two_extra_jets(tmp_path):
+    """A plain ttbar sample is the wrong process for a ttbar+2j brief."""
+    write_lhe(tmp_path / "unweighted_events.lhe.gz", n=10000, gz=True)  # no jets
+    gaussian_hist(tmp_path / "top_mass_hist.json")
+    (tmp_path / "top_mass.pdf").write_bytes(b"%PDF-1.4")
+    g = grade_workspace(open_spec(), tmp_path)
+    assert not g.ok
+    fs = [c for c in g.events.failures if c.name == "final state"]
+    assert fs and "wanted 2 jets" in fs[0].detail.replace("(-6, 6) + ", "")
+
+
+def test_jet_flavours_may_differ_event_to_event(tmp_path):
+    """gg, q qbar and mixed flavours are all valid ttbar+2j final states."""
+    body = ("<LesHouchesEvents>\n<init>\n" + INIT + "\n</init>\n"
+            + event_2j(((21, 1), (21, 1))) + "\n"
+            + event_2j(((2, 1), (-2, 1))) + "\n"
+            + event_2j(((21, 1), (-1, 1))) + "\n</LesHouchesEvents>\n")
+    (tmp_path / "e.lhe").write_text(body)
+    r = verify_lhe(tmp_path / "e.lhe", nevents=3, beam_energy_gev=6800.0,
+                   n_extra_jets=2)
+    assert r.ok, [c.detail for c in r.failures]
+
+
+def test_a_lepton_is_not_a_jet(tmp_path):
+    """t t~ e+ e- has the right multiplicity and the wrong physics."""
+    (tmp_path / "e.lhe").write_text(
+        "<LesHouchesEvents>\n<init>\n" + INIT + "\n</init>\n"
+        + event_2j(((11, 1), (-11, 1))) + "\n</LesHouchesEvents>\n")
+    r = verify_lhe(tmp_path / "e.lhe", nevents=1, beam_energy_gev=6800.0,
+                   n_extra_jets=2)
+    assert not r.ok
+    assert any("non-parton" in c.detail for c in r.failures)
+
+
+def test_a_histogram_under_any_name_is_still_found(tmp_path):
+    """The brief says 'somewhere in this directory', so grading must search."""
+    complete_workspace(tmp_path)
+    (tmp_path / "top_mass_hist.json").rename(tmp_path / "my_analysis_out.json")
+    g = grade_workspace(open_spec(), tmp_path)
+    assert g.ok, [c.detail for c in (g.peak.failures if g.peak else [])]
+    assert any("my_analysis_out.json" in n for n in g.notes)
+
+
+def test_a_plot_under_any_name_and_format_counts(tmp_path):
+    complete_workspace(tmp_path)
+    (tmp_path / "top_mass.pdf").rename(tmp_path / "mtop.png")
+    g = grade_workspace(open_spec(), tmp_path)
+    assert not g.plot_missing
+    assert any("mtop.png" in n for n in g.notes)

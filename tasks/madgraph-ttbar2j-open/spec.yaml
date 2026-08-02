@@ -1,8 +1,8 @@
 schema_version: 1
-name: madgraph-ttbar-open
+name: madgraph-ttbar2j-open
 kind: open
 description: >
-  The madgraph-ttbar-lhe physics carried through to a reconstructed top mass
+  The madgraph-ttbar2j-lhe physics carried through to a reconstructed top mass
   peak, with the agent given only the goal. No card, no commands, no
   container: it works out how to generate, shower and analyse, and carries
   that out itself. Nothing here is shown to the agent — this file is the
@@ -10,6 +10,9 @@ description: >
 
 # Where the brief tells the agent to leave each artefact, relative to its
 # workspace. A file found elsewhere is graded anyway and noted.
+# Hints, not requirements. The brief asks for the files "somewhere in this
+# directory", so grading searches by shape and only uses these as a first
+# guess — a differently-named histogram is a naming choice, not wrong physics.
 deliverable:
   events: unweighted_events.lhe.gz
   mass_histogram: top_mass_hist.json
@@ -18,12 +21,16 @@ deliverable:
 # What the output must contain, checked against the LHE payload and the
 # histogram numbers rather than the generator's banner or the figure.
 requirements:
-  process: "p p > t t~"
+  process: "p p > t t~ j j"
   order: LO
   nevents: 10000
   beam_energy_gev: 6800
   beam_pdg: [2212, 2212]
+  # one top and one antitop, plus exactly two partons of any light flavour:
+  # the jet flavours differ event by event, so an exact set cannot express it
   final_state_pdg: [6, -6]
+  extra_jets: 2
+  jet_pdg: [21, 1, 2, 3, 4, 5, -1, -2, -3, -4, -5]
 
   # Every stochastic stage is pinned, so two runs of the same pipeline are
   # byte-identical and two runs from different agents differ only where their
@@ -37,7 +44,10 @@ requirements:
   # shift and broaden the peak, so the window is wide on purpose. A peak
   # outside it means the reconstruction is wrong, not that the physics is.
   top_mass_gev: 172.5
-  mass_tolerance_gev: 15.0
+  # Wider than for plain ttbar: two extra hard jets make the wrong-pairing
+  # combinatorics substantially worse, which drags a naive reconstruction's
+  # peak down and broadens it.
+  mass_tolerance_gev: 20.0
   min_histogram_entries: 200
   # a peak must rise above its own background to be one at all
   min_peak_prominence: 1.5

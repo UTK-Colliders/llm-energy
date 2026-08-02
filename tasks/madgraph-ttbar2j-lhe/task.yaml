@@ -1,7 +1,7 @@
 schema_version: 1
-name: madgraph-ttbar-lhe
+name: madgraph-ttbar2j-lhe
 description: >
-  MadGraph5_aMC@NLO leading-order generation of 10,000 pp -> t t~ events at
+  MadGraph5_aMC@NLO leading-order generation of 10,000 pp -> t t~ j j events at
   sqrt(s) = 13.6 TeV (6800 GeV per beam), unweighted LHE output.
 
 images:
@@ -22,7 +22,7 @@ images:
 
 default_image: native
 
-command: ["mg5_aMC", "/cards/ttbar_lhe.mg5"]
+command: ["mg5_aMC", "/cards/ttbar2j_lhe.mg5"]
 
 mounts:
   - source: cards
@@ -34,7 +34,9 @@ mounts:
 
 workdir: /work
 env: {}
-timeout_s: 7200
+# ttbar+2j is a much bigger calculation than ttbar: many more
+# subprocesses to generate and compile, and far slower unweighting.
+timeout_s: 28800
 
 expect:
   outputs:
@@ -42,7 +44,7 @@ expect:
       record_as: lhe_file
 
 metadata:
-  process: "p p > t t~"
+  process: "p p > t t~ j j"
   order: LO
   ebeam1_gev: 6800
   ebeam2_gev: 6800

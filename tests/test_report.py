@@ -20,7 +20,7 @@ def make_task_result(events_hash="a" * 64, nevents=10000, lhe_path="",
         outputs = {"lhe_file": lhe_path, "lhe_file_nevents": nevents,
                    "lhe_file_events_sha256": events_hash}
     return TaskRunResult(
-        task_name="madgraph-ttbar-lhe", image="llm-energy/mg5amc:test",
+        task_name="madgraph-ttbar2j-lhe", image="llm-energy/mg5amc:test",
         image_arch="arm64", emulated=False, wall_time_s=600.0,
         gross_joules=gross, baseline_ref="b.json", baseline_mean_w=4.0,
         net_joules=net, mean_power_w=15.0, alignment_uncertainty_j=15.0,
@@ -68,7 +68,7 @@ def test_ratio_uses_net_energy():
 
 def test_single_report_markdown_contents():
     md = render_markdown(Trial("run", make_task_result(), make_session_result()))
-    assert "madgraph-ttbar-lhe" in md
+    assert "madgraph-ttbar2j-lhe" in md
     assert "E_LLM / E_task" in md
     assert "Caveats" in md
     assert "envelope" in md or "not a statistical" in md

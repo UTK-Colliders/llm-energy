@@ -8,8 +8,8 @@ REPO = Path(__file__).parent.parent
 
 
 def test_madgraph_task_parses():
-    task = find_task("madgraph-ttbar-lhe", REPO / "tasks")
-    assert task.name == "madgraph-ttbar-lhe"
+    task = find_task("madgraph-ttbar2j-lhe", REPO / "tasks")
+    assert task.name == "madgraph-ttbar2j-lhe"
     assert task.default_image == "native"
     native = task.image()
     assert native.build_context is not None
@@ -20,16 +20,16 @@ def test_madgraph_task_parses():
     assert task.metadata["nevents"] == 10000
     assert task.metadata["ebeam1_gev"] == 6800
     # the mg5 card the command references must exist and pin the seed
-    card = task.task_dir / "cards" / "ttbar_lhe.mg5"
+    card = task.task_dir / "cards" / "ttbar2j_lhe.mg5"
     text = card.read_text()
     assert "set nevents 10000" in text
     assert "set ebeam1 6800.0" in text
     assert "set iseed 42" in text
-    assert "generate p p > t t~" in text
+    assert "generate p p > t t~ j j" in text
 
 
 def test_unknown_image_variant_rejected():
-    task = find_task("madgraph-ttbar-lhe", REPO / "tasks")
+    task = find_task("madgraph-ttbar2j-lhe", REPO / "tasks")
     with pytest.raises(ValueError, match="no image variant"):
         task.image("nonexistent")
 
@@ -131,19 +131,19 @@ def test_empty_phase_list_is_rejected(tmp_path):
 
 
 def test_split_task_matches_the_single_phase_task_physics():
-    single = find_task("madgraph-ttbar-lhe", REPO / "tasks")
-    split = find_task("madgraph-ttbar-split", REPO / "tasks")
+    single = find_task("madgraph-ttbar2j-lhe", REPO / "tasks")
+    split = find_task("madgraph-ttbar2j-split", REPO / "tasks")
     keys = ("process", "order", "ebeam1_gev", "ebeam2_gev", "nevents", "iseed")
     assert {k: single.metadata[k] for k in keys} == {k: split.metadata[k] for k in keys}
     # both build the same image, from the one Dockerfile
     assert single.image().tag == split.image().tag
     assert (split.image().build_context / "Dockerfile").exists()
     # the run card the launch phase uses pins the same physics
-    launch = (split.task_dir / "cards" / "ttbar_launch.mg5").read_text()
+    launch = (split.task_dir / "cards" / "ttbar2j_launch.mg5").read_text()
     for line in ("set nevents 10000", "set ebeam1 6800.0", "set iseed 42"):
         assert line in launch
-    codegen = (split.task_dir / "cards" / "ttbar_codegen.mg5").read_text()
-    assert "generate p p > t t~" in codegen
+    codegen = (split.task_dir / "cards" / "ttbar2j_codegen.mg5").read_text()
+    assert "generate p p > t t~ j j" in codegen
     # comments may discuss launch; no MG5 *command* in this card may be one,
     # or event generation would leak into the compile phase
     commands = [ln.strip() for ln in codegen.splitlines()

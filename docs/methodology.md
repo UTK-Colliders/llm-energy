@@ -5,7 +5,7 @@
 For common HEP research workflow tasks, how much energy does an LLM consume
 *coordinating* the task, compared to the energy consumed by *running* the task
 itself? The first benchmark task is MadGraph5_aMC@NLO generating 10,000
-`p p > t t~` events at √s = 13.6 TeV at leading order, producing unweighted
+`p p > t t~ j j` events at √s = 13.6 TeV at leading order, producing unweighted
 LHE files, in a Docker container on a dedicated Mac.
 
 Three quantities are kept in deliberately separate pipelines that only meet at
@@ -96,7 +96,7 @@ Containers on macOS run inside a lightweight Linux VM. Two consequences:
 2. **Architecture matters.** The community `scailfin/madgraph5-amc-nlo`
    images are linux/amd64 only and would run under Rosetta 2 emulation on
    Apple Silicon, distorting energy. The primary image is therefore built
-   natively for the host architecture from `tasks/madgraph-ttbar-lhe/
+   natively for the host architecture from `tasks/madgraph-ttbar2j-lhe/
    Dockerfile` (MG5_aMC v3.5.16, python:3.11-slim base). Any run whose image
    architecture differs from the host is flagged `emulated: true` and loudly
    warned about.
@@ -108,7 +108,14 @@ periodic `docker stats` snapshots as diagnostics.
 
 ### MadGraph specifics
 
-- Process: `generate p p > t t~` at LO; `nevents = 10000`,
+- Process: `generate p p > t t~ j j` at LO — ttbar with two additional hard
+  partons, a substantially larger calculation than plain ttbar in both code
+  generation and unweighting, which is why the task timeout is 8 hours.
+  Grading checks the topology (one top, one antitop, exactly two partons of
+  any light flavour) rather than an exact final state, since the jet flavours
+  differ event by event. The reconstructed-mass window is widened to +/- 20
+  GeV because two extra hard jets worsen the wrong-pairing combinatorics.
+- `nevents = 10000`,
   `ebeam1 = ebeam2 = 6800` GeV; output gzipped unweighted LHE.
 - `iseed = 42` is pinned so repeat runs (and runs coordinated by different
   LLMs on the same image) must produce identical events.
@@ -116,13 +123,13 @@ periodic `docker stats` snapshots as diagnostics.
   `e+ e- > mu+ mu-` run), so measured runs exclude first-use tool setup. The
   ttbar process's own code generation and Fortran compilation stay **inside**
   the measured run: they are part of performing the task. The
-  `madgraph-ttbar-split` task measures them separately — see below.
+  `madgraph-ttbar2j-split` task measures them separately — see below.
 
 ## Splitting compilation from execution
 
-`madgraph-ttbar-lhe` bills one number for work of two very different kinds:
+`madgraph-ttbar2j-lhe` bills one number for work of two very different kinds:
 `launch` compiles the generated Fortran and *then* generates events. The
-`madgraph-ttbar-split` task runs the same physics — same process, beams,
+`madgraph-ttbar2j-split` task runs the same physics — same process, beams,
 event count, and seed — as two separately measured phases:
 
 | Phase | Contents |
@@ -155,7 +162,7 @@ are then not a clean separation.
 
 ### What the split does not claim
 
-Event identity between `madgraph-ttbar-split` and `madgraph-ttbar-lhe` is an
+Event identity between `madgraph-ttbar2j-split` and `madgraph-ttbar2j-lhe` is an
 empirical question, not an assumption: the same seed drives the same
 generator, but the two reach madevent by different routes. Check it with
 `llm-energy verify-events` rather than relying on it. The single-phase task is
@@ -168,14 +175,14 @@ unchanged, so results already collected under it remain comparable.
 The question is what an LLM spends *coordinating* a task, so what counts as
 coordination decides what the study measures. Two task kinds bracket it.
 
-A **pinned** task (`madgraph-ttbar-lhe`) hands the agent a working run card and
+A **pinned** task (`madgraph-ttbar2j-lhe`) hands the agent a working run card and
 the command to run. Its session cost is the cost of executing a known
 solution: reading a runbook, invoking one command, checking a number. That is
 a floor, not the quantity of interest, and it barely separates one model from
 another.
 
-An **open** task (`madgraph-ttbar-open`) states only the required output and
-leaves the method to the agent. It is a three-step physics job: generate the
+An **open** task (`madgraph-ttbar2j-open`) is a dozen lines written the way a
+colleague would ask, and leaves the method to the agent. It is a three-step physics job: generate the
 hard process in MadGraph, shower and hadronise it in Pythia 8, then
 reconstruct the top quark and show its invariant mass peak. The agent must
 work out that it needs both generators, how to obtain them, what cards to
@@ -187,11 +194,19 @@ The pinned task currently stops at the LHE file, so it is a control for step 1
 only. Extending it to match would require Pythia 8 in the image and a tested
 reconstruction script.
 
+The brief's *register* is part of the design. A detailed specification
+measures an agent's ability to follow a specification; a short informal
+request measures what the study is actually about, which is an agent doing
+research from the kind of instruction a physicist would really send. The
+grader therefore infers what it needs — searching for artefacts by shape
+rather than by dictated filename — so that the brief can stay casual without
+the measurement becoming unverifiable.
+
 ### Isolation
 
 An open run happens in a scratch workspace outside this repository, containing
 only the brief. This is a measurement requirement, not tidiness:
-`tasks/madgraph-ttbar-lhe/cards/ttbar_lhe.mg5` is a complete worked solution,
+`tasks/madgraph-ttbar2j-lhe/cards/ttbar2j_lhe.mg5` is a complete worked solution,
 and an agent working in the repository could find it — correctly and
 helpfully — collapsing the open task back into the pinned one. Isolation also
 puts the harness's own commands out of reach, so an open session cannot
