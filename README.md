@@ -267,35 +267,36 @@ There are two kinds of task here, and they measure different things.
 | | `madgraph-ttbar2j-lhe` (pinned) | `madgraph-ttbar2j-open` |
 |---|---|---|
 | The agent is given | the run card, the command, the steps | a dozen lines, the way a colleague would ask |
-| The job | generate the events | generate → shower in Pythia 8 → reconstruct the top mass peak |
-| The agent works out | nothing | how to get MadGraph and Pythia, what cards to write, how to reconstruct, how to plot |
+| The job | generate the events | generate → shower in Pythia 8 → write HepMC |
+| The agent works out | nothing | how to get MadGraph and Pythia, what cards to write, how to hand one to the other |
 | Runs in | this repo | a scratch workspace outside it, containing only the brief |
 | Measures | the floor: executing a known solution | solving the problem |
 | Correctness is | guaranteed by construction | **an outcome**, graded per run |
 
-The open task is a three-step physics job, not a one-liner. The agent has to
-work out the decay channel, the jet definition, and the combinatorics on its
-own — that reasoning is the thing being measured.
+The open task is a two-generator pipeline, not a one-liner. The agent has to
+source both generators, work out the process and jet definition, and get
+MadGraph's output into Pythia in a form Pythia will accept — that plumbing is
+the thing being measured.
 
 The brief is deliberately short and informal, because a specification document
 is not what anyone would actually send a collaborator, and a measurement of an
 agent following a spec is not a measurement of an agent doing research. It
 reads in full:
 
-> Can you get me a ttbar+2 jets sample and show me the top mass peak?
+> Can you get me a showered ttbar+2 jets sample?
 >
 > - 10k events, leading order, pp at 13.6 TeV, MadGraph
-> - shower it through Pythia 8
+> - shower it through Pythia 8 and write the result out as HepMC
 > - seed 42 everywhere, so I can compare this against other people's runs
-> - leave the LHE, the plot, and the histogram numbers as JSON (bin edges and
->   counts, in GeV) somewhere in this directory
+> - leave the LHE and the HepMC somewhere in this directory
 
 Everything the grader needs is implied by that, not dictated by it. Because
 the brief says *somewhere in this directory* rather than naming files, grading
-searches by shape: the LHE by extension, the histogram by finding a JSON whose
-arrays are in the N+1/N relationship a histogram has, the plot by being a
-figure. Key names are read forgivingly — `bin_edges_gev`/`counts`,
-`edges`/`values`, `x`/`y`, or anything else that fits structurally.
+searches by shape: the LHE by extension, the HepMC by its ASCII listing
+markers — including files with no recognisable suffix, since Pythia's default
+output is often just `.dat`. Both searches rank candidates by how many events
+actually parse and skip the generators' own working trees, which are full of
+plausible-looking files with nothing in them.
 
 The pinned task exists as a control. Its brief hands over
 `cards/ttbar2j_lhe.mg5`, which is the complete answer — including the
@@ -355,14 +356,15 @@ uv run llm-energy verify-deliverable ~/llm-energy-workspaces/madgraph-ttbar2j-op
 ```
 events:   .../unweighted_events.lhe.gz
   ok    beam energy — 6800 / 6800 GeV, wanted 6800 each
+  ok    beam particles — PDG 2212 / 2212, wanted 2212 / 2212
   ok    event count — 10000 events, wanted 10000
-  ok    final state — all events (-6, 6)
-mass peak: .../top_mass_hist.json
-  ok    histogram parses — 30 bins, 100-250 GeV
-  ok    entries — 45119 entries, wanted at least 200
-  FAIL  peak is interior — tallest bin at 102.5 GeV — that is the edge of the
-        range, so the histogram shows a tail, not a peak
-  FAIL  peak position — 102.5 GeV, wanted 172.5 ± 15
+  ok    final state — every event is (-6, 6) + 2 jets
+showered: .../showered.hepmc
+  ok    format — HepMC3 (v3.02.05)
+  ok    event count — 10000 events, wanted 10000
+  FAIL  showered — median 10 particles per event — under 50, so this looks
+        like the parton-level record converted to HepMC rather than showered
+  ok    hard process — every event contains 6, -6
 deliverables do NOT meet the specification
 ```
 
@@ -370,15 +372,18 @@ Event checks read the LHE payload — the `<init>` block and the event records �
 not the generator's banner. A sample produced by an unexpected route still
 passes; a convincing banner over the wrong physics still fails.
 
-The peak is graded from `top_mass_hist.json`, which the brief asks for
-alongside the figure, because a plot cannot be checked automatically — relabel
-its axes and it looks the same to a grader. Four things are checked: the
-histogram parses, it has enough entries, the tallest bin is *interior* (a
-maximum in the end bin is a falling spectrum, not a peak), it sits within
-172.5 ± 15 GeV, and it rises above its own median bin. The window is wide on
-purpose: this is a *reconstructed* mass, so jets, combinatorics and
-out-of-cone losses shift and broaden it. A peak outside that window means the
-reconstruction is wrong, not that the physics is.
+The HepMC is graded the same way, on four things: it parses as HepMC2 or
+HepMC3 ASCII, it holds the right number of events, each event contains a top
+and an antitop, and — the one that carries the shower requirement — the median
+event holds at least 50 particles.
+
+That last check exists because writing the LHE back out as HepMC produces a
+file that passes every other one. Same header, same event count, same tops.
+The difference is multiplicity: a parton-level ttbar+2j record holds around a
+dozen particles where a showered and hadronised event holds several hundred.
+The floor sits well below a realistic shower and well above any parton-level
+record, so it separates the two without pinning down tune or hadronisation
+settings the brief deliberately leaves open.
 
 The grading key lives in `tasks/madgraph-ttbar2j-open/spec.yaml` and is never
 shown to the agent. A failed run is recorded, not discarded: a model that
@@ -434,12 +439,16 @@ uv run llm-energy compare-deliverables \
 ```
 
 ```
- generator version   3.5.16         3.5.16
- event hash          94b2d3eaf82b   94b2d3eaf82b
- histogram hash      37a4180fbf1f   16a0685bc157
- peak (GeV)          171.0          176.0
+ generator version   3.5.16           3.5.16
+ event hash          94b2d3eaf82b     94b2d3eaf82b
+ HepMC writer        HepMC3 3.02.05   HepMC3 3.02.05
+ shower hash         aa7e623ee247     f81b621e1301
 events IDENTICAL — the pinned seeds held
-histograms differ — expected when the reconstruction methods differ
+showers differ — the shower is only pinned by seed, so version and tune
+choices show up here
+note: identical events but different showers — the hard process reproduced
+and the shower did not, so the difference is in the Pythia version, tune or
+seed rather than in MadGraph
 ```
 
 The two artefacts carry different expectations, and conflating them would
@@ -449,15 +458,18 @@ mislead:
   means a seed was not honoured — or the versions differ, which the tool
   checks first, because an unrecorded or mismatched version explains different
   events on its own and blaming a seed would be wrong.
-- **Histograms need not.** Two agents reconstructing the top differently reach
-  different histograms from identical events. That is the method varying, not
-  a reproducibility failure — and it is the interesting comparison: same
-  physics in, how far apart do the answers land. Identical histograms *with*
-  differing events is the one suspicious combination, and is flagged: it
-  usually means a histogram was reused rather than regenerated.
+- **Showers need not, quite.** The brief pins the shower seed too, so an
+  identical pipeline reproduces the record exactly — but Pythia's version and
+  tune are the agent's to choose, and either changes the output from the same
+  seed and the same LHE. A difference is a difference in method, not evidence
+  a seed was dropped. It is only readable next to the event comparison: same
+  events with different showers isolates the difference to the shower, and
+  differing events make the shower comparison meaningless, which is said
+  rather than left to be inferred.
 
-Histograms are fingerprinted over their values, not their JSON text, so
-formatting choices do not masquerade as physics differences.
+Showers are fingerprinted over their particle lines only. Event headers carry
+counters and weights that differ between writers without the physics
+differing, so hashing them would report bookkeeping as disagreement.
 
 
 ### Adding phases to your own task

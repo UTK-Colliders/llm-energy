@@ -230,7 +230,56 @@ def open_spec():
                           / "madgraph-ttbar2j-open")
 
 
-def complete_workspace(tmp_path, n_events=10000, peak=172.5):
+def write_hepmc(path, n=10, particles=200, version=3, pdgs=(6, -6), gz=False):
+    """A minimal but structurally real HepMC ASCII record."""
+    import gzip as _gzip
+
+    marker = ("HepMC::Asciiv3" if version == 3 else "HepMC::IO_GenEvent")
+    out = [f"HepMC::Version {'3.02.05' if version == 3 else '2.06.09'}",
+           f"{marker}-START_EVENT_LISTING"]
+    for i in range(n):
+        out.append(f"E {i} 2 {particles}")
+        out.append("U GEV MM")
+        # the hard-process particles the spec insists on, then filler
+        ids = list(pdgs) + [211] * max(0, particles - len(pdgs))
+        for j, pdg in enumerate(ids, start=1):
+            if version == 3:                        # P id vertex pdg px py pz e m status
+                out.append(f"P {j} -1 {pdg} 0 0 100 100 0.14 1")
+            else:                                   # P barcode pdg px py pz e m status
+                out.append(f"P {j} {pdg} 0 0 100 100 0.14 1 0 0 0 0")
+    out.append(f"{marker}-END_EVENT_LISTING")
+    text = "\n".join(out) + "\n"
+    if gz:
+        with _gzip.open(path, "wt") as fh:
+            fh.write(text)
+    else:
+        path.write_text(text)
+    return path
+
+
+def peak_spec():
+    """A spec that still asks for the histogram and plot.
+
+    No shipped task does any more, but the grading path is retained and has to
+    stay honest for the day one does.
+    """
+    from llm_energy.deliverable import OpenSpec
+    real = open_spec()
+    return OpenSpec(name="peak", requirements=real.requirements,
+                    deliverables={"events": "unweighted_events.lhe.gz",
+                                  "mass_histogram": "top_mass_hist.json",
+                                  "mass_plot": "top_mass.pdf"})
+
+
+def complete_workspace(tmp_path, n_events=10000, hepmc_events=10000,
+                       particles=200):
+    write_lhe(tmp_path / "unweighted_events.lhe.gz", n=n_events, gz=True,
+              ev=event_2j())
+    write_hepmc(tmp_path / "showered.hepmc", n=hepmc_events, particles=particles)
+    return tmp_path
+
+
+def peak_workspace(tmp_path, n_events=10000, peak=172.5):
     write_lhe(tmp_path / "unweighted_events.lhe.gz", n=n_events, gz=True,
               ev=event_2j())
     gaussian_hist(tmp_path / "top_mass_hist.json", peak=peak)
@@ -239,37 +288,65 @@ def complete_workspace(tmp_path, n_events=10000, peak=172.5):
 
 
 def test_a_complete_run_passes_every_deliverable(tmp_path):
-    g = grade_workspace(open_spec(), complete_workspace(tmp_path, n_events=10000))
-    assert g.ok, [c.detail for c in (g.events.failures + g.peak.failures)]
+    g = grade_workspace(open_spec(), complete_workspace(tmp_path))
+    assert g.ok, [c.detail for c in (g.events.failures + g.hepmc.failures)]
 
 
-def test_good_events_but_a_wrong_peak_fails_overall(tmp_path):
-    g = grade_workspace(open_spec(),
-                        complete_workspace(tmp_path, n_events=10000, peak=90.0))
+def test_events_without_a_shower_fail_overall(tmp_path):
+    complete_workspace(tmp_path)
+    (tmp_path / "showered.hepmc").unlink()
+    g = grade_workspace(open_spec(), tmp_path)
     assert g.events.ok
-    assert not g.peak.ok
-    assert not g.ok, "a correct sample with a bad reconstruction is not a pass"
+    assert g.hepmc is not None and not g.hepmc.exists
+    assert not g.ok, "the LHE alone is half the job"
 
 
-def test_a_missing_plot_fails_even_when_the_physics_is_right(tmp_path):
+def test_an_lhe_rewritten_as_hepmc_is_not_a_shower(tmp_path):
+    """The check that carries the whole shower requirement.
+
+    Converting the parton-level record to HepMC produces a file with the right
+    header, the right event count and the right tops in it. Only the particle
+    multiplicity tells it apart from a showered sample.
+    """
+    g = grade_workspace(open_spec(), complete_workspace(tmp_path, particles=12))
+    assert g.events.ok
+    assert not g.hepmc.ok and not g.ok
+    fail = [c for c in g.hepmc.failures if c.name == "showered"]
+    assert fail and "parton-level" in fail[0].detail
+
+
+def test_a_short_hepmc_fails_on_the_count_not_on_the_shower(tmp_path):
+    g = grade_workspace(open_spec(), complete_workspace(tmp_path,
+                                                        hepmc_events=1115))
+    names = [c.name for c in g.hepmc.failures]
+    assert names == ["event count"]
+    assert "1115 events, wanted 10000" in g.hepmc.failures[0].detail
+
+
+def test_a_hepmc_found_under_another_name_is_still_graded(tmp_path):
     complete_workspace(tmp_path)
-    (tmp_path / "top_mass.pdf").unlink()
+    (tmp_path / "showered.hepmc").rename(tmp_path / "pythia_out.hepmc")
     g = grade_workspace(open_spec(), tmp_path)
-    assert g.events.ok and g.peak.ok
-    assert g.plot_missing and not g.ok
+    assert g.hepmc.ok
+    assert any("nothing at showered.hepmc" in n for n in g.notes)
 
 
-def test_a_missing_histogram_is_reported_not_silently_skipped(tmp_path):
+def test_a_hepmc_in_a_generator_scratch_tree_loses_to_the_real_one(tmp_path):
     complete_workspace(tmp_path)
-    (tmp_path / "top_mass_hist.json").unlink()
+    scratch = tmp_path / "ttbar2j" / "SubProcesses" / "P1_gg_ttxqq"
+    scratch.mkdir(parents=True)
+    write_hepmc(scratch / "showered.hepmc", n=0)
+    (tmp_path / "showered.hepmc").rename(tmp_path / "final.hepmc")
     g = grade_workspace(open_spec(), tmp_path)
-    assert not g.ok
-    assert g.peak is not None and not g.peak.exists
-    # The report keeps the *suggested* path so callers can name it, but a
-    # caller that prints it as the graded file claims a histogram was examined
-    # when the search found none — which is how one run reported both "no
-    # histogram JSON anywhere" and "mass peak: .../top_mass_hist.json".
-    assert not Path(g.peak.path).exists()
+    assert g.hepmc.ok and "final.hepmc" in g.hepmc.path
+
+
+def test_the_deliverable_set_follows_the_spec(tmp_path):
+    """Dropping an artefact from the spec drops it from the verdict."""
+    complete_workspace(tmp_path)
+    g = grade_workspace(open_spec(), tmp_path)
+    assert g.peak is None and not g.plot_missing, "no task asks for these now"
+    assert g.hepmc is not None
 
 
 def test_events_found_under_another_name_are_still_graded(tmp_path):
@@ -278,6 +355,41 @@ def test_events_found_under_another_name_are_still_graded(tmp_path):
     g = grade_workspace(open_spec(), tmp_path)
     assert g.events is not None and g.events.ok
     assert any("nothing at unweighted_events" in n for n in g.notes)
+
+
+# --- the retained histogram/plot grading path --------------------------------
+
+def test_a_complete_peak_run_passes(tmp_path):
+    g = grade_workspace(peak_spec(), peak_workspace(tmp_path))
+    assert g.ok, [c.detail for c in (g.events.failures + g.peak.failures)]
+
+
+def test_good_events_but_a_wrong_peak_fails_overall(tmp_path):
+    g = grade_workspace(peak_spec(), peak_workspace(tmp_path, peak=90.0))
+    assert g.events.ok
+    assert not g.peak.ok
+    assert not g.ok, "a correct sample with a bad reconstruction is not a pass"
+
+
+def test_a_missing_plot_fails_even_when_the_physics_is_right(tmp_path):
+    peak_workspace(tmp_path)
+    (tmp_path / "top_mass.pdf").unlink()
+    g = grade_workspace(peak_spec(), tmp_path)
+    assert g.events.ok and g.peak.ok
+    assert g.plot_missing and not g.ok
+
+
+def test_a_missing_histogram_is_reported_not_silently_skipped(tmp_path):
+    peak_workspace(tmp_path)
+    (tmp_path / "top_mass_hist.json").unlink()
+    g = grade_workspace(peak_spec(), tmp_path)
+    assert not g.ok
+    assert g.peak is not None and not g.peak.exists
+    # The report keeps the *suggested* path so callers can name it, but a
+    # caller that prints it as the graded file claims a histogram was examined
+    # when the search found none — which is how one run reported both "no
+    # histogram JSON anywhere" and "mass peak: .../top_mass_hist.json".
+    assert not Path(g.peak.path).exists()
 
 
 def test_a_sparse_histogram_reports_prominence_readably(tmp_path):
@@ -341,7 +453,9 @@ def graded_run(tmp_path, name, n_events=3, peak=172.5, version=None):
                   ev=event_2j())
     gaussian_hist(d / "top_mass_hist.json", peak=peak)
     (d / "top_mass.pdf").write_bytes(b"%PDF-1.4")
-    return name, grade_workspace(open_spec(), d)
+    # Cross-run comparison covers events and histograms, so it is graded
+    # against the spec that still asks for both.
+    return name, grade_workspace(peak_spec(), d)
 
 
 def test_identical_pipelines_match_on_both_artefacts(tmp_path):
@@ -401,8 +515,7 @@ def test_coincident_peaks_produce_no_spread_note(tmp_path):
 def test_the_spec_now_demands_two_extra_jets(tmp_path):
     """A plain ttbar sample is the wrong process for a ttbar+2j brief."""
     write_lhe(tmp_path / "unweighted_events.lhe.gz", n=10000, gz=True)  # no jets
-    gaussian_hist(tmp_path / "top_mass_hist.json")
-    (tmp_path / "top_mass.pdf").write_bytes(b"%PDF-1.4")
+    write_hepmc(tmp_path / "showered.hepmc", n=10000)
     g = grade_workspace(open_spec(), tmp_path)
     assert not g.ok
     fs = [c for c in g.events.failures if c.name == "final state"]
@@ -434,17 +547,17 @@ def test_a_lepton_is_not_a_jet(tmp_path):
 
 def test_a_histogram_under_any_name_is_still_found(tmp_path):
     """The brief says 'somewhere in this directory', so grading must search."""
-    complete_workspace(tmp_path)
+    peak_workspace(tmp_path)
     (tmp_path / "top_mass_hist.json").rename(tmp_path / "my_analysis_out.json")
-    g = grade_workspace(open_spec(), tmp_path)
+    g = grade_workspace(peak_spec(), tmp_path)
     assert g.ok, [c.detail for c in (g.peak.failures if g.peak else [])]
     assert any("my_analysis_out.json" in n for n in g.notes)
 
 
 def test_a_plot_under_any_name_and_format_counts(tmp_path):
-    complete_workspace(tmp_path)
+    peak_workspace(tmp_path)
     (tmp_path / "top_mass.pdf").rename(tmp_path / "mtop.png")
-    g = grade_workspace(open_spec(), tmp_path)
+    g = grade_workspace(peak_spec(), tmp_path)
     assert not g.plot_missing
     assert any("mtop.png" in n for n in g.notes)
 
@@ -511,3 +624,54 @@ def test_a_histogram_in_the_generator_tree_is_ignored(tmp_path):
     (scratch / "results.json").write_text(
         json.dumps({"bin_edges_gev": [1, 2, 3], "counts": [4, 5]}))
     assert find_histogram(tmp_path) is None
+
+
+# --- comparing showers across runs -------------------------------------------
+
+def hepmc_run(tmp_path, name, particles=200, pdgs=(6, -6), n_events=3):
+    d = tmp_path / name
+    d.mkdir()
+    write_lhe(d / "unweighted_events.lhe.gz", n=n_events, gz=True, ev=event_2j())
+    write_hepmc(d / "showered.hepmc", n=n_events, particles=particles, pdgs=pdgs)
+    return name, grade_workspace(open_spec(), d)
+
+
+def test_identical_pipelines_match_on_events_and_shower(tmp_path):
+    comp = compare_graded([hepmc_run(tmp_path, "a"), hepmc_run(tmp_path, "b")])
+    assert comp.events_identical and comp.showers_identical
+    assert comp.notes == []
+
+
+def test_same_events_different_shower_points_at_pythia(tmp_path):
+    """The comparison that isolates the shower from the hard process."""
+    comp = compare_graded([hepmc_run(tmp_path, "a", particles=200),
+                           hepmc_run(tmp_path, "b", particles=300)])
+    assert comp.events_identical, "the LHE is the same, so MadGraph reproduced"
+    assert not comp.showers_identical
+    assert any("Pythia version, tune or seed" in n for n in comp.notes)
+
+
+def test_a_shower_difference_is_not_read_into_when_the_events_differ(tmp_path):
+    comp = compare_graded([hepmc_run(tmp_path, "a", n_events=3),
+                           hepmc_run(tmp_path, "b", n_events=5)])
+    assert not comp.events_identical and not comp.showers_identical
+    assert any("fix the hard-process difference first" in n.replace(
+        "difference before reading anything into this one",
+        "difference first") for n in comp.notes)
+
+
+def test_the_shower_hash_ignores_event_header_counters(tmp_path):
+    """Weights and counters on the E line differ between writers; physics does not."""
+    from llm_energy.deliverable import verify_hepmc
+
+    a = write_hepmc(tmp_path / "a.hepmc", n=2, particles=20)
+    b = tmp_path / "b.hepmc"
+    b.write_text(a.read_text().replace("E 0 2 20", "E 0 7 20")
+                 .replace("E 1 2 20", "E 1 7 20"))
+    assert (verify_hepmc(a, nevents=2).events_sha256
+            == verify_hepmc(b, nevents=2).events_sha256)
+
+
+def test_no_shower_in_the_spec_means_no_shower_row(tmp_path):
+    comp = compare_graded([graded_run(tmp_path, "a"), graded_run(tmp_path, "b")])
+    assert not comp.showers_compared

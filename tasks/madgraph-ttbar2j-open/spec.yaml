@@ -2,24 +2,23 @@ schema_version: 1
 name: madgraph-ttbar2j-open
 kind: open
 description: >
-  The madgraph-ttbar2j-lhe physics carried through to a reconstructed top mass
-  peak, with the agent given only the goal. No card, no commands, no
-  container: it works out how to generate, shower and analyse, and carries
-  that out itself. Nothing here is shown to the agent — this file is the
-  operator's grading key, and BRIEF.md is what the agent reads.
+  The madgraph-ttbar2j-lhe physics carried through the parton shower, with the
+  agent given only the goal. No card, no commands, no container: it works out
+  how to generate and shower, and carries that out itself. Nothing here is
+  shown to the agent — this file is the operator's grading key, and BRIEF.md
+  is what the agent reads.
 
 # Where the brief tells the agent to leave each artefact, relative to its
 # workspace. A file found elsewhere is graded anyway and noted.
 # Hints, not requirements. The brief asks for the files "somewhere in this
 # directory", so grading searches by shape and only uses these as a first
-# guess — a differently-named histogram is a naming choice, not wrong physics.
+# guess — a differently-named HepMC is a naming choice, not wrong physics.
 deliverable:
   events: unweighted_events.lhe.gz
-  mass_histogram: top_mass_hist.json
-  mass_plot: top_mass.pdf
+  hepmc: showered.hepmc
 
-# What the output must contain, checked against the LHE payload and the
-# histogram numbers rather than the generator's banner or the figure.
+# What the output must contain, checked against the LHE and HepMC payloads
+# rather than either generator's banner.
 requirements:
   process: "p p > t t~ j j"
   order: LO
@@ -40,14 +39,12 @@ requirements:
     hard_process: 42        # MadGraph
     shower: 42              # Pythia 8
 
-  # Reconstructed, not generated: jets, combinatorics and out-of-cone losses
-  # shift and broaden the peak, so the window is wide on purpose. A peak
-  # outside it means the reconstruction is wrong, not that the physics is.
-  top_mass_gev: 172.5
-  # Wider than for plain ttbar: two extra hard jets make the wrong-pairing
-  # combinatorics substantially worse, which drags a naive reconstruction's
-  # peak down and broadens it.
-  mass_tolerance_gev: 20.0
-  min_histogram_entries: 200
-  # a peak must rise above its own background to be one at all
-  min_peak_prominence: 1.5
+  # The shower has to have actually run. Writing the LHE back out as HepMC
+  # produces a file that passes every check but this one: a parton-level
+  # ttbar+2j record holds around a dozen particles, where a showered and
+  # hadronised event holds several hundred. The floor is set well below a
+  # realistic shower and well above any parton-level record, so it separates
+  # the two without pinning down tune or hadronisation settings.
+  min_particles_per_event: 50
+  # the tops survive into the record as intermediate particles
+  hepmc_require_pdg: [6, -6]

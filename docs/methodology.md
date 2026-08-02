@@ -141,8 +141,7 @@ periodic `docker stats` snapshots as diagnostics.
   generation and unweighting, which is why the task timeout is 8 hours.
   Grading checks the topology (one top, one antitop, exactly two partons of
   any light flavour) rather than an exact final state, since the jet flavours
-  differ event by event. The reconstructed-mass window is widened to +/- 20
-  GeV because two extra hard jets worsen the wrong-pairing combinatorics.
+  differ event by event.
 - `nevents = 10000`,
   `ebeam1 = ebeam2 = 6800` GeV; output gzipped unweighted LHE.
 - `iseed = 42` is pinned so repeat runs (and runs coordinated by different
@@ -210,17 +209,16 @@ a floor, not the quantity of interest, and it barely separates one model from
 another.
 
 An **open** task (`madgraph-ttbar2j-open`) is a dozen lines written the way a
-colleague would ask, and leaves the method to the agent. It is a three-step physics job: generate the
-hard process in MadGraph, shower and hadronise it in Pythia 8, then
-reconstruct the top quark and show its invariant mass peak. The agent must
+colleague would ask, and leaves the method to the agent. It is a
+two-generator pipeline: generate the hard process in MadGraph, then shower and
+hadronise it in Pythia 8 and write the result out as HepMC. The agent must
 work out that it needs both generators, how to obtain them, what cards to
-write, which decay channel to target, how to build jets, how to resolve the
-combinatorics, and how to plot the result. The difference between the two
-tasks isolates the cost of solving.
+write, and how to get MadGraph's output into Pythia in a form Pythia will
+accept — which is where most of the real work is. The difference between the
+two tasks isolates the cost of solving.
 
-The pinned task currently stops at the LHE file, so it is a control for step 1
-only. Extending it to match would require Pythia 8 in the image and a tested
-reconstruction script.
+The pinned task currently stops at the LHE file, so it is a control for the
+first stage only. Extending it to match would require Pythia 8 in the image.
 
 The brief's *register* is part of the design. A detailed specification
 measures an agent's ability to follow a specification; a short informal
@@ -271,8 +269,8 @@ banner over the wrong physics still fails.
 ### Seeding, and what exact comparison can mean
 
 Every stochastic stage of the open task is pinned: the hard process (MadGraph,
-seed 42), the shower (Pythia 8, seed 42), and any randomness the agent
-introduces in reconstruction. The brief additionally requires that a rerun of
+seed 42) and the shower (Pythia 8, seed 42). The brief additionally requires
+that a rerun of
 the agent's own pipeline reproduce byte-identical output, which is the only
 check that catches an unseeded stage the brief did not anticipate — a
 clock-seeded shower, or workers merged in completion order.
@@ -282,11 +280,19 @@ keeps them apart:
 
 - **Event samples must be identical** across agents. Same generator, same
   version, same seed leaves nothing free. A difference is a defect.
-- **Histograms are not expected to be identical** across agents. The
-  reconstruction method is the agent's to choose, so identical events
-  legitimately yield different histograms; the spread of peak positions across
-  methods is a result, not an error. Only a rerun of the *same* pipeline
-  should reproduce the histogram exactly.
+- **Showers are not quite expected to be identical** across agents. The seed
+  is pinned, so a rerun of the same pipeline reproduces the record exactly —
+  but Pythia's version and tune are the agent's to choose, and either changes
+  the output from the same seed and the same LHE. A shower difference is
+  therefore a method difference, not a dropped seed, and it is only readable
+  next to the event comparison: identical events with differing showers
+  isolates the shower, while differing events make the shower comparison
+  meaningless. The tool says which case it is rather than leaving it to be
+  inferred.
+
+Showers are fingerprinted over their particle lines alone. Event headers
+carry counters and weights that differ between writers without the physics
+differing, and hashing them would report bookkeeping as disagreement.
 
 Generator versions confound this: the same seed in different MG5 versions
 gives different events. The version is therefore read from the LHE banner and
@@ -294,29 +300,35 @@ reported alongside the hashes, and an unrecorded version is distinguished from
 a mismatched one — unknown is not evidence of difference, and treating it as
 such would blame a seed for a version's doing.
 
-### Grading a reconstructed mass peak
+### Grading the shower
 
-The figure asked for in step 3 cannot be graded: relabel its axes and it looks
-the same to any checker. The brief therefore also requires the histogram as
-numbers (`bin_edges_gev`, `counts`), and the peak is judged from those.
+The HepMC record is graded on four things, all reported with their measured
+values:
 
-Four criteria, all reported with their measured values:
+- it parses as HepMC2 or HepMC3 ASCII;
+- it holds the requested number of events;
+- every event contains a top and an antitop, which survive into the record as
+  intermediate particles;
+- the median event holds at least 50 particles.
 
-- the histogram parses and its edges are monotonic;
-- it has at least a few hundred entries, below which a "peak" is noise;
-- the tallest bin is **interior** — a maximum in the first or last bin is a
-  falling spectrum whose range never covered the mass region, which would
-  otherwise pass a position check by accident;
-- the peak sits within 172.5 ± 15 GeV, and rises at least 1.5× above the
-  median bin.
+The last one carries the whole shower requirement. Writing the LHE back out
+as HepMC produces a file that passes every other check: same header, same
+event count, same tops. What separates the two is multiplicity — a
+parton-level ttbar+2j record holds around a dozen particles where a showered
+and hadronised event holds several hundred. The floor sits well below any
+realistic shower and well above any parton-level record, so it distinguishes
+them without constraining tune or hadronisation settings the brief
+deliberately leaves open.
 
-The window is wide deliberately. This is a *reconstructed* mass, not a
-generated one: jet clustering, wrong-pairing combinatorics and out-of-cone
-losses shift the peak down and broaden it, by amounts that depend on choices
-the agent is free to make. A peak outside the window indicates a broken
-reconstruction rather than new physics, which is exactly the failure worth
-catching. FWHM and prominence are recorded as information, not as pass/fail
-thresholds beyond the minimum above.
+The count is a **median**, not a minimum. A single low-multiplicity event is
+physics; a whole file of them is a skipped shower.
+
+An empty record fails rather than passing vacuously. "Every event contains a
+top" is true of no events, and reads as a pass — the same failure shape that
+once let a zero-event LHE clear its final-state check.
+
+A histogram- and plot-grading path is retained in `deliverable.py` and stays
+tested, though no shipped task currently asks for either.
 
 Runs that fail are kept. A model that spends heavily and produces nothing
 usable is a data point about that model, not an absent measurement.

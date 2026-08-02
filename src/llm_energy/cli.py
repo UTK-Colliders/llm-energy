@@ -521,6 +521,12 @@ def verify_deliverable(workspace: Path, task_name: str, task_dir: Path,
     if graded.events.events_sha256:
         console.print(f"  [dim]event content sha256: "
                       f"{graded.events.events_sha256[:16]}[/dim]")
+    if graded.hepmc is not None:
+        if graded.hepmc.exists:
+            show("showered:", graded.hepmc)
+        else:
+            console.print(f"[red]FAIL[/red]  showered — no HepMC anywhere "
+                          f"under {workspace}")
     if graded.peak is not None:
         if graded.peak.exists:
             show("mass peak:", graded.peak)
@@ -577,17 +583,32 @@ def compare_deliverables(runs: tuple[tuple[str, str], ...], task_name: str,
     table.add_row("generator version",
                   *[v or "unknown" for v in comp.generator_versions])
     table.add_row("event hash", *[h[:12] or "n/a" for h in comp.event_hashes])
-    table.add_row("histogram hash",
-                  *[h[:12] or "n/a" for h in comp.histogram_hashes])
-    table.add_row("peak (GeV)",
-                  *[f"{p:.1f}" if p is not None else "n/a" for p in comp.peaks_gev])
+    if comp.showers_compared:
+        table.add_row("HepMC writer",
+                      *[v or "unknown" for v in comp.hepmc_versions])
+        table.add_row("shower hash", *[h[:12] or "n/a" for h in comp.hepmc_hashes])
+    if any(comp.histogram_hashes):
+        table.add_row("histogram hash",
+                      *[h[:12] or "n/a" for h in comp.histogram_hashes])
+        table.add_row("peak (GeV)",
+                      *[f"{p:.1f}" if p is not None else "n/a"
+                        for p in comp.peaks_gev])
     console.print(table)
 
     if comp.events_identical:
         console.print("[green]events IDENTICAL[/green] — the pinned seeds held")
     else:
         console.print("[red]events DIFFER[/red] — at a fixed seed they should not")
-    if comp.histograms_identical and comp.events_identical:
+    if comp.showers_compared:
+        if comp.showers_identical:
+            console.print("[green]showers identical[/green] — same Pythia "
+                          "version, tune and seed as well as same events")
+        else:
+            console.print("[dim]showers differ — the shower is only pinned by "
+                          "seed, so version and tune choices show up here[/dim]")
+    if not any(comp.histogram_hashes):
+        pass
+    elif comp.histograms_identical and comp.events_identical:
         console.print("[green]histograms identical[/green] — same reconstruction "
                       "as well as same events")
     elif comp.histograms_identical:

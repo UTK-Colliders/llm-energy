@@ -14,6 +14,7 @@ banner over the wrong physics still fails.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass, field
@@ -331,6 +332,10 @@ class OpenSpec:
         return self.deliverables["events"]
 
     @property
+    def hepmc_path(self) -> str | None:
+        return self.deliverables.get("hepmc")
+
+    @property
     def histogram_path(self) -> str | None:
         return self.deliverables.get("mass_histogram")
 
@@ -348,6 +353,15 @@ class OpenSpec:
             n_extra_jets=int(r.get("extra_jets", 0)),
             jet_pdgs=tuple(r.get("jet_pdg", DEFAULT_JET_PDGS)),
             beam_pdg=tuple(r.get("beam_pdg", (2212, 2212))),
+        )
+
+    def verify_hepmc(self, path: Path) -> DeliverableReport:
+        r = self.requirements
+        return verify_hepmc(
+            path,
+            nevents=int(r.get("hepmc_nevents", r["nevents"])),
+            require_pdgs=tuple(r.get("hepmc_require_pdg", ())),
+            min_particles_per_event=int(r.get("min_particles_per_event", 50)),
         )
 
     def verify_peak(self, path: Path) -> MassPeakReport:
@@ -440,6 +454,81 @@ def find_deliverable(root: Path, patterns: tuple[str, ...] =
     return sorted(seen, key=rank, reverse=True)
 
 
+def verify_hepmc(path: Path, nevents: int, require_pdgs: tuple[int, ...] = (),
+                 min_particles_per_event: int = 50) -> DeliverableReport:
+    """Grade a showered HepMC record on its contents.
+
+    The particle-count floor is the check that matters. Writing an LHE out as
+    HepMC is a format conversion, not a shower, and the two are indistinguishable
+    from the header — but a parton-level ttbar+2j record holds under a dozen
+    particles where a showered and hadronised one holds hundreds. Without it,
+    skipping Pythia entirely passes every other check here.
+    """
+    from llm_energy import hepmc
+
+    report = DeliverableReport(path=str(path), exists=path.exists())
+    if not report.exists:
+        return report
+
+    def check(name, ok, detail):
+        report.checks.append(Check(name=name, ok=bool(ok), detail=detail))
+
+    header = hepmc.read_header(path)
+    if header is None:
+        check("format", False, "not a readable HepMC2 or HepMC3 ASCII file")
+        return report
+    report.generator_version = f"HepMC{header.version_major}" + (
+        f" {header.version}" if header.version else "")
+    check("format", True, f"HepMC{header.version_major}"
+                          + (f" (v{header.version})" if header.version else ""))
+
+    n = 0
+    particle_counts: list[int] = []
+    missing_pdgs = None
+    # Over the particle lines only. Event headers carry counters and weights
+    # that differ between writers without the physics differing.
+    digest = hashlib.sha256()
+    for event in hepmc.iter_events(path):
+        n += 1
+        particle_counts.append(hepmc.count_particles(event))
+        for line in event:
+            if line.startswith("P "):
+                digest.update(" ".join(line.split()).encode())
+                digest.update(b"\n")
+        if require_pdgs and missing_pdgs is None:
+            present = set(hepmc.particle_pdgs(event, header.version_major))
+            absent = [p for p in require_pdgs if p not in present]
+            if absent:
+                missing_pdgs = (n, absent)
+    report.n_events = n
+    if n:
+        report.events_sha256 = digest.hexdigest()
+    check("event count", n == nevents, f"{n} events, wanted {nevents}")
+
+    if n == 0:
+        # Vacuously true of nothing, and it reads as a pass. An empty record
+        # has not been checked; it has nothing to check.
+        check("showered", False, "no events to check")
+        if require_pdgs:
+            check("hard process", False, "no events to check")
+        return report
+
+    median = sorted(particle_counts)[len(particle_counts) // 2]
+    check("showered", median >= min_particles_per_event,
+          f"median {median} particles per event"
+          + ("" if median >= min_particles_per_event else
+             f" — under {min_particles_per_event}, so this looks like the "
+             "parton-level record converted to HepMC rather than showered"))
+
+    if require_pdgs:
+        wanted = ", ".join(str(p) for p in require_pdgs)
+        check("hard process", missing_pdgs is None,
+              f"every event contains {wanted}" if missing_pdgs is None
+              else f"event {missing_pdgs[0]} is missing PDG "
+                   f"{', '.join(str(p) for p in missing_pdgs[1])}")
+    return report
+
+
 def find_plot(root: Path) -> Path | None:
     """A figure the agent produced, ignoring the generator's own images."""
     best: Path | None = None
@@ -456,6 +545,7 @@ def find_plot(root: Path) -> Path | None:
 class GradedWorkspace:
     """Every artefact an open run was asked for, graded together."""
     events: DeliverableReport | None = None
+    hepmc: DeliverableReport | None = None
     peak: MassPeakReport | None = None
     plot_missing: bool = False
     notes: list[str] = field(default_factory=list)
@@ -463,18 +553,19 @@ class GradedWorkspace:
     @property
     def ok(self) -> bool:
         return (self.events is not None and self.events.ok
+                and (self.hepmc is None or self.hepmc.ok)
                 and (self.peak is None or self.peak.ok)
                 and not self.plot_missing)
 
 
 def grade_workspace(spec: "OpenSpec", workspace: Path,
                     events_override: Path | None = None) -> GradedWorkspace:
-    """Grade a whole open run: events, mass peak, and the figure's presence.
+    """Grade a whole open run against whatever its spec asks for.
 
-    Each artefact is looked for where the brief said to put it. The events
-    fall back to a search, because a sample in the wrong place is a naming
-    slip rather than wrong physics; the histogram does not, since guessing
-    which JSON in a workspace is the histogram would invent a result.
+    Each artefact is looked for where the brief said to put it, then by shape
+    if it is not there — a sample in the wrong place is a naming slip rather
+    than wrong physics. Only the artefacts named in the spec's `deliverable`
+    block are graded, so dropping one from the task drops it from the verdict.
     """
     graded = GradedWorkspace()
 
@@ -487,6 +578,19 @@ def grade_workspace(spec: "OpenSpec", workspace: Path,
                 f"nothing at {spec.events_path}; grading "
                 f"{events.relative_to(workspace)} instead")
     graded.events = spec.verify(events) if events.exists() else None
+
+    if spec.hepmc_path:
+        from llm_energy.hepmc import find_hepmc
+
+        shower = workspace / spec.hepmc_path
+        if not shower.exists():
+            found = find_hepmc(workspace)
+            if found:
+                shower = found[0]
+                graded.notes.append(
+                    f"nothing at {spec.hepmc_path}; grading "
+                    f"{shower.relative_to(workspace)} instead")
+        graded.hepmc = spec.verify_hepmc(shower)
 
     # The brief asks for files "somewhere in this directory" rather than at
     # fixed paths, so look for the shape of each artefact and fall back to a
@@ -526,14 +630,25 @@ class DeliverableComparison:
     """Two or more open runs, compared artefact by artefact."""
     labels: list[str] = field(default_factory=list)
     event_hashes: list[str] = field(default_factory=list)
+    hepmc_hashes: list[str] = field(default_factory=list)
     histogram_hashes: list[str] = field(default_factory=list)
     generator_versions: list[str | None] = field(default_factory=list)
+    hepmc_versions: list[str | None] = field(default_factory=list)
     peaks_gev: list[float | None] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     @property
     def events_identical(self) -> bool:
         hashes = [h for h in self.event_hashes if h]
+        return len(hashes) == len(self.labels) and len(set(hashes)) == 1
+
+    @property
+    def showers_compared(self) -> bool:
+        return any(h for h in self.hepmc_hashes)
+
+    @property
+    def showers_identical(self) -> bool:
+        hashes = [h for h in self.hepmc_hashes if h]
         return len(hashes) == len(self.labels) and len(set(hashes)) == 1
 
     @property
@@ -568,6 +683,12 @@ def compare_graded(labelled: list[tuple[str, GradedWorkspace]]) -> DeliverableCo
 
     - **Events must match.** Same generator, same version, same pinned seed —
       a difference means a seed was not honoured or the versions differ.
+    - **Showers need not, quite.** The brief pins the shower seed, so an
+      identical pipeline reproduces the record exactly — but Pythia's version
+      and tune are the agent's to choose, and either changes the output from
+      the same seed and the same LHE. A difference is a difference in method,
+      not evidence a seed was dropped, and it is only informative next to the
+      event comparison: same events, different showers isolates the shower.
     - **Histograms need not.** Two agents that reconstruct the top differently
       land on different histograms from identical events; that is the method
       varying, not a reproducibility failure. Identical histograms mean the
@@ -579,6 +700,8 @@ def compare_graded(labelled: list[tuple[str, GradedWorkspace]]) -> DeliverableCo
         comp.event_hashes.append(g.events.events_sha256 if g.events else "")
         comp.generator_versions.append(
             g.events.generator_version if g.events else None)
+        comp.hepmc_hashes.append(g.hepmc.events_sha256 if g.hepmc else "")
+        comp.hepmc_versions.append(g.hepmc.generator_version if g.hepmc else None)
         comp.histogram_hashes.append(g.peak.histogram_sha256 if g.peak else "")
         comp.peaks_gev.append(g.peak.peak_gev if g.peak else None)
 
@@ -597,6 +720,20 @@ def compare_graded(labelled: list[tuple[str, GradedWorkspace]]) -> DeliverableCo
             comp.notes.append(
                 "same generator version but different events — a seed was not "
                 "honoured somewhere in the hard-process step")
+    if comp.showers_compared and not comp.showers_identical:
+        if comp.events_identical:
+            comp.notes.append(
+                "identical events but different showers — the hard process "
+                "reproduced and the shower did not, so the difference is in "
+                "the Pythia version, tune or seed rather than in MadGraph"
+                + ("" if len(set(comp.hepmc_versions)) == 1 else
+                   " (the HepMC writers differ too: "
+                   + ", ".join(str(v) for v in comp.hepmc_versions) + ")"))
+        else:
+            comp.notes.append(
+                "showers differ, but so do the events they were made from — "
+                "fix the hard-process difference before reading anything into "
+                "this one")
     spread = comp.peak_spread_gev()
     if spread:
         comp.notes.append(

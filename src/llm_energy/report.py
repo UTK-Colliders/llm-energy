@@ -605,6 +605,16 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
                                  + ("ok" if ev.ok else "failed")))
         for c in ev.failures:
             rows.append((f"    {c.name}", c.detail))
+    hep = graded.hepmc
+    if hep is not None:
+        if not hep.exists:
+            rows.append(("  showered (HepMC)", "missing"))
+        else:
+            rows.append(("  showered (HepMC)",
+                         f"{hep.n_events} events, "
+                         + ("ok" if hep.ok else "failed")))
+            for c in hep.failures:
+                rows.append((f"    {c.name}", c.detail))
     peak = graded.peak
     if peak is not None:
         if not peak.exists:
