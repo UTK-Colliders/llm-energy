@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from llm_energy import machine_info
-from llm_energy.docker_util import docker_available
+from llm_energy.docker_util import docker_available, running_containers
 from llm_energy.schemas import BaselineResult, now_iso
 
 
@@ -17,12 +17,15 @@ def measure_baseline(backend, duration_s: float, interval_ms: int,
     idle (its idle draw belongs in the baseline that gets subtracted)."""
     ts = now_iso().replace(":", "-")
     raw_path = out_dir / f"baseline-trace-{ts}.txt"
+    # Recorded before sampling so it describes the machine the capture saw.
+    busy = running_containers()
     backend.start(interval_ms, raw_path)
     time.sleep(duration_s)
     trace = backend.stop()
 
     watts = [s.combined_mw / 1000.0 for s in trace.samples]
     return BaselineResult(
+        containers_running=[f"{cid} ({image})" for cid, image in busy],
         duration_s=trace.duration_s(),
         mean_w=trace.mean_watts(),
         std_w=statistics.stdev(watts) if len(watts) > 1 else 0.0,
@@ -52,6 +55,15 @@ def baseline_warnings(result: BaselineResult, results_dir: Path) -> list[str]:
     bad enough it drives them negative.
     """
     warnings: list[str] = []
+    if result.containers_running:
+        # The decisive one. A leaked container from the previous run makes an
+        # idle baseline that is not idle, and because it stays leaked, the
+        # drift check below sees a steady figure and says nothing.
+        warnings.append(
+            f"{len(result.containers_running)} container(s) were running "
+            f"during this capture ({', '.join(result.containers_running)}) — "
+            "their power is in the baseline and will be subtracted from every "
+            "run measured against it. Stop them and re-record")
     if result.mean_w > 0 and result.std_w > UNSETTLED_SPREAD * result.mean_w:
         warnings.append(
             f"the machine was not settled: {result.mean_w:.2f} W mean but "

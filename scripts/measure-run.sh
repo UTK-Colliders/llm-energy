@@ -11,24 +11,31 @@
 #
 # Usage:  scripts/measure-run.sh [options]
 #   --task NAME          task under tasks/ (default: madgraph-ttbar2j-lhe)
-#   --model NAME         pass --model to claude (for cross-model comparison)
-#   --label NAME         label for the report (default: the model, else "run")
+#   --model NAME         model for the measured session (default: claude-sonnet-5;
+#                        "cli-default" leaves the choice to the claude CLI)
+#   --label NAME         label for the report (default: the model)
 #   --interactive        supervise the session instead of running headless
 #   --allow-all-tools    let the headless agent use tools without prompting
 #                        (it will install software and run containers as you)
 #   --baseline-seconds N idle baseline duration (default: 30)
 #   --skip-baseline      reuse the newest baseline for this machine
+#   --allow-running-containers  measure anyway with other containers running
 #   --backend NAME       powermetrics | rapl | tdp-model (default: auto)
 #
 set -euo pipefail
 
 TASK=madgraph-ttbar2j-lhe
-MODEL=""
+# Pinned rather than left to the CLI's default. Which model coordinated the
+# run is the independent variable of this whole experiment, so inheriting
+# whatever the CLI happens to prefer this month makes runs incomparable
+# without anything in the result saying why.
+MODEL=claude-sonnet-5
 LABEL=""
 INTERACTIVE=0
 ALLOW_TOOLS=0
 BASELINE_SECONDS=30
 SKIP_BASELINE=0
+ALLOW_RUNNING=0
 BACKEND=""
 
 die() { printf 'measure-run: %s\n' "$*" >&2; exit 1; }
@@ -43,8 +50,9 @@ while [ $# -gt 0 ]; do
     --allow-all-tools)   ALLOW_TOOLS=1; shift ;;
     --baseline-seconds)  BASELINE_SECONDS=${2:?--baseline-seconds needs a value}; shift 2 ;;
     --skip-baseline)     SKIP_BASELINE=1; shift ;;
+    --allow-running-containers) ALLOW_RUNNING=1; shift ;;
     --backend)           BACKEND=${2:?--backend needs a value}; shift 2 ;;
-    -h|--help)           sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)           sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)                   die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -66,7 +74,10 @@ OPEN=0
 
 BACKEND_ARGS=()
 [ -n "$BACKEND" ] && BACKEND_ARGS=(--backend "$BACKEND")
-LABEL=${LABEL:-${MODEL:-run}}
+# "cli-default" is the way to ask for no --model flag at all; an empty MODEL
+# would otherwise be indistinguishable from "the user did not choose".
+[ "$MODEL" = "cli-default" ] && MODEL=""
+LABEL=${LABEL:-${MODEL:-cli-default}}
 
 # macOS ships bash 3.2, where "${arr[@]}" on an EMPTY array trips `set -u`
 # with "unbound variable". Every BACKEND_ARGS use below goes through the
@@ -75,6 +86,31 @@ LABEL=${LABEL:-${MODEL:-run}}
 # 1. Preflight ---------------------------------------------------------------
 step "Preflight"
 uv run llm-energy doctor || die "doctor failed — fix the above before measuring"
+
+# A container left over from an earlier run — this task's own, most often,
+# after a session ended while MadGraph was still generating — draws power
+# through the idle baseline and through the whole session that follows. Both
+# numbers come out wrong, and consistently so, which is worse than noisily:
+# the baseline drift check sees a steady figure and stays quiet. Two measured
+# runs were spent this way before the check existed. Stop before spending a
+# third.
+if [ "$ALLOW_RUNNING" -eq 0 ]; then
+  LEFTOVER=$(uv run python -c '
+from llm_energy.docker_util import running_containers
+for cid, image in running_containers():
+    print(f"  {cid}  {image}")
+' 2>/dev/null || true)
+  if [ -n "$LEFTOVER" ]; then
+    printf 'measure-run: containers are already running:\n%s\n' "$LEFTOVER" >&2
+    die "their power lands in the idle baseline and in this session, so both
+  measurements would be wrong. Stop them first:
+
+      docker ps -q | xargs docker rm -f
+
+  or pass --allow-running-containers if they are meant to be there (the
+  baseline will include them, and the run will be labelled accordingly)."
+  fi
+fi
 
 # 2. Image ------------------------------------------------------------------
 # Must happen BEFORE the session starts. run-task would otherwise build the

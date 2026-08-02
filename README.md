@@ -187,10 +187,16 @@ session runs, then pairs the artifacts and writes a report. Useful flags:
 
 | Flag | Effect |
 |---|---|
-| `--model NAME` | pass a model to `claude` — one flag per cross-model trial |
+| `--model NAME` | the coordinating model — one flag per cross-model trial. Defaults to `claude-sonnet-5`; `cli-default` passes no `--model` and lets the CLI choose |
 | `--interactive` | supervise the session instead of running it headless |
 | `--skip-baseline` | reuse the newest baseline for this machine |
+| `--allow-running-containers` | measure with other containers already up (their power lands in the baseline) |
 | `--task NAME` | a different task under `tasks/` |
+
+The model is pinned rather than inherited because which model coordinated the
+run is the independent variable: a trial that took whatever the CLI defaulted
+to that week is not comparable with one that did not, and nothing in the
+result would say so.
 
 ### What the agent is told
 
@@ -475,12 +481,15 @@ Phases share the run directory and run in order; a failed phase skips the rest.
 One run per model — same brief, same pinned physics, different coordinator:
 
 ```sh
-scripts/measure-run.sh --model claude-fable-5 --label fable --skip-baseline
+scripts/measure-run.sh --model claude-sonnet-5 --label sonnet --skip-baseline
+scripts/measure-run.sh --model claude-opus-5 --label opus --skip-baseline
 scripts/measure-run.sh --model claude-haiku-4-5-20251001 --label haiku --skip-baseline
 ```
 
 Take a fresh baseline for the first run and reuse it for the rest, so all
-trials are netted against the same idle figure. Each run prints its artifact
+trials are netted against the same idle figure — and check that no container
+from a previous trial is still up when you take it, or every trial after it
+is netted against a baseline that includes MadGraph. Each run prints its artifact
 paths at the end; feed them to `compare`, which lines the trials up and
 verdicts whether they produced physically identical events (the run card pins
 `iseed`, so identical events are the expected outcome on the same image):

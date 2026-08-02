@@ -99,6 +99,9 @@ class BaselineResult:
     backend: str
     docker_running: bool
     machine: MachineInfo
+    # Containers running during the capture. Their draw is inside this
+    # baseline and gets subtracted from every measurement made against it.
+    containers_running: list[str] = field(default_factory=list)
     raw_trace_file: str | None = None
     schema_version: int = SCHEMA_VERSION
     tool_version: str = __version__

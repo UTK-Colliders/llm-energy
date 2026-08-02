@@ -51,3 +51,27 @@ def test_a_lower_baseline_than_last_time_is_fine(tmp_path):
 def test_an_unreadable_previous_baseline_does_not_crash_the_capture(tmp_path):
     Path(tmp_path / "baseline-broken.json").write_text("{not json")
     assert baseline_warnings(a_baseline(), tmp_path) == []
+
+
+def test_a_container_running_during_the_capture_is_flagged(tmp_path):
+    b = a_baseline()
+    b.containers_running = ["42fd1e297226 (llm-energy/mg5amc:3.5.16)"]
+    warnings = baseline_warnings(b, tmp_path)
+    assert any("were running during this capture" in w for w in warnings)
+    assert any("42fd1e297226" in w for w in warnings)
+
+
+def test_a_persistently_leaked_container_is_invisible_to_the_drift_check(tmp_path):
+    """The failure this exists for.
+
+    A container leaked by run N is still up for run N+1's baseline, so that
+    baseline is contaminated — and so is N+2's, by the same amount. Drift
+    compares consecutive baselines and sees nothing wrong. Only the container
+    check catches it.
+    """
+    write_result(a_baseline(mean_w=20.95), tmp_path / "baseline-old.json")
+    contaminated = a_baseline(mean_w=21.76)
+    assert baseline_warnings(contaminated, tmp_path) == [], "drift is blind here"
+
+    contaminated.containers_running = ["42fd1e297226 (mg5amc)"]
+    assert baseline_warnings(contaminated, tmp_path) != []

@@ -623,8 +623,14 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
     return rows
 
 
+def _wall(seconds: float) -> str:
+    # A container that lived 0.1 s rendered as "0 s" next to a real joule
+    # figure reads as a broken row rather than a short one.
+    return f"{seconds:.2f} s" if seconds < 10 else f"{seconds:.0f} s"
+
+
 def container_rows(sp: SessionPowerResult) -> list[list[str]]:
-    return [[c.container_id, c.image or "?", f"{c.wall_time_s:.0f} s",
+    return [[c.container_id, c.image or "?", _wall(c.wall_time_s),
              f"{c.gross_joules:.1f} J", f"{c.mean_power_w:.2f} W"]
             for c in sp.containers]
 

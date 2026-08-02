@@ -36,6 +36,31 @@ def docker_available() -> bool:
         return False
 
 
+def running_containers() -> list[tuple[str, str]]:
+    """(short id, image) for every container running right now.
+
+    A container left over from an earlier run keeps drawing power, and the
+    next run's idle baseline captures it as though it were the idle floor.
+    That number is then subtracted from every measurement made against the
+    baseline — so one leaked container quietly corrupts subsequent runs, and
+    the drift check cannot see it because every recent baseline is wrong the
+    same way.
+    """
+    try:
+        out = subprocess.run(["docker", "ps", "--format", "{{.ID}}\t{{.Image}}"],
+                             capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if out.returncode != 0:
+        return []
+    found = []
+    for line in out.stdout.splitlines():
+        cid, _, image = line.partition("\t")
+        if cid.strip():
+            found.append((cid.strip(), image.strip()))
+    return found
+
+
 def image_exists(tag: str) -> bool:
     return subprocess.run(["docker", "image", "inspect", tag],
                           capture_output=True).returncode == 0
