@@ -22,7 +22,14 @@
 #    avoidable waste is a different rhetorical claim from comparing it against
 #    total consumption, and the two should not sit unlabelled on one axis.
 #
-# 3. Spread. Every one of these varies by a factor of two or more across
+# 3. Scale. Individual references are the same order as a research run and can
+#    be read directly. Industry and national ones are 6-15 orders of magnitude
+#    larger: "1/9,700,000,000 of Malta" is not a number anyone can read, so
+#    those are reported as *how many runs it would take to equal them*, and
+#    are meant to be used against a projected aggregate (see `--runs-per-day`
+#    and `--actors`) rather than against one run.
+#
+# 4. Spread. Every one of these varies by a factor of two or more across
 #    vehicles, climates, houses and habits. They are order-of-magnitude
 #    anchors, not measurements. `low`/`high` variants are given where the
 #    range materially changes the comparison.
@@ -84,3 +91,38 @@ television:
   watts: 100                      # modern 65-inch LED; OLED in HDR is higher
   low_watts: 70
   high_watts: 150
+
+# --- more individual choices -------------------------------------------------
+individual:
+  kettle:            {litres: 1.0, delta_c: 80, efficiency: 0.85}
+  phone_charge_wh:   20            # a night's charge including charger losses
+  phone_year_days:   365
+  shower:            {minutes: 10, litres_per_minute: 9.5, delta_c: 28}
+  laundry_hot_vs_cold_kwh: 2.0     # hot wash instead of cold; mostly water heating
+  tumble_dryer_kwh:  3.0           # one load, instead of hanging it up
+  ev_100_miles:      {miles: 100, miles_per_kwh: 3.5}
+  flight:                          # one economy seat, transatlantic, both ways
+    km_each_way: 5550
+    litres_per_100_pax_km: 3.5
+    jet_fuel_mj_per_litre: 34.7
+    trips: 2
+  household_year_kwh: 10500        # US average home electricity, EIA
+
+# --- industry ----------------------------------------------------------------
+# Order-of-magnitude figures for context, not audited values.
+industry:
+  rack:        {kw: 10, hours: 24}          # one datacentre rack for a day
+  cluster:     {mw: 1.0, hours: 24}         # a university HPC cluster for a day
+  lhc:         {mw: 200, hours: 1}          # CERN's draw while the LHC runs
+  steel_gj_per_tonne: 20                    # one tonne, blast-furnace route
+  llm_training_mwh: 1287                    # GPT-3 scale, Patterson et al. 2021
+  datacentre:  {mw: 1.0, hours: 8760}       # a 1 MW facility for a year
+
+# --- small countries ---------------------------------------------------------
+# Annual *electricity* consumption, rounded hard. Iceland is an outlier for its
+# size because of aluminium smelting, which is why it is worth including.
+national:
+  countries:
+    malta:   {label: Malta,   twh_per_year: 2.7,  daily: true}
+    estonia: {label: Estonia, twh_per_year: 8.5}
+    iceland: {label: Iceland, twh_per_year: 19.5}

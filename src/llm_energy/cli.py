@@ -596,45 +596,86 @@ DEFAULT_REFERENCES = REPO_ROOT / "references" / "everyday.yaml"
 @main.command("references")
 @click.option("--file", "ref_file", type=click.Path(path_type=Path),
               default=DEFAULT_REFERENCES, show_default=True)
+@click.option("--scale", "scales", multiple=True,
+              type=click.Choice(["individual", "industry", "national"]),
+              help="show only these scales (repeatable; default: all)")
 @click.option("--primary", is_flag=True,
               help="put electricity and fuel on one primary-energy basis")
 @click.option("--joules", type=float, default=None,
-              help="also express this many Joules as a fraction of each")
-def references_cmd(ref_file: Path, primary: bool, joules: float | None):
-    """Everyday energy reference points, for putting Joules in context."""
+              help="express this many Joules against each reference")
+@click.option("--runs-per-day", type=float, default=None,
+              help="project --joules to a year at this rate")
+@click.option("--actors", type=int, default=1, show_default=True,
+              help="how many people are doing it, for the projection")
+def references_cmd(ref_file: Path, scales: tuple[str, ...], primary: bool,
+                   joules: float | None, runs_per_day: float | None,
+                   actors: int):
+    """Energy reference points, for putting Joules in context.
+
+    Individual-scale references are the same order as a research run and the
+    ratio reads directly. Industry and national ones are six to fifteen orders
+    of magnitude larger, so they are shown as how many runs would equal them,
+    and are only meaningful against a projected aggregate: pass --runs-per-day
+    and --actors to ask what the practice costs at scale.
+    """
     from rich.table import Table
 
-    from llm_energy.references import (KWH_J, MJ_J, compare, format_multiple,
-                                       load_references)
+    from llm_energy.references import (KWH_J, MJ_J, compare, format_count,
+                                       format_multiple, load_references,
+                                       project_annual)
 
     refs, constants = load_references(ref_file)
+    if scales:
+        refs = [r for r in refs if r.scale in set(scales)]
+        if not refs:
+            raise click.ClickException("no references at that scale")
     factor = float(constants.get("primary_energy_factor", 1.0))
 
-    table = Table(title="everyday energy references"
+    projected = None
+    if runs_per_day is not None:
+        if joules is None:
+            raise click.ClickException("--runs-per-day needs --joules")
+        projected = project_annual(joules, runs_per_day, actors)
+
+    table = Table(title="energy references"
                         + (" (primary basis)" if primary else ""))
-    for col in ("Reference", "Energy", "kWh", "Basis", "Kind"):
+    for col in ("Reference", "Energy", "Scale", "Kind"):
         table.add_column(col)
     if joules is not None:
-        table.add_column("this run")
+        table.add_column("one run")
+        table.add_column("runs to equal")
+    if projected is not None:
+        table.add_column("a year at scale")
 
     ranked = compare(joules if joules is not None else 1.0, refs, constants,
                      primary=primary)
     for r, frac in ranked:
         e = r.primary_joules(factor) if primary else r.joules
-        row = [r.label, f"{e / MJ_J:.2f} MJ", f"{e / KWH_J:.2f}",
-               r.basis, r.kind]
+        row = [r.label, f"{e / MJ_J:,.2f} MJ", r.scale,
+               "consumed" if r.kind == "absolute" else "wasted"]
         if joules is not None:
-            row.append(format_multiple(frac))
+            row += [format_multiple(frac),
+                    format_count(1 / frac) if frac > 0 else "—"]
+        if projected is not None:
+            row.append(format_multiple(
+                (projected * factor if primary else projected)
+                / (r.primary_joules(factor) if primary else r.joules)))
         table.add_row(*row)
     console.print(table)
-    console.print("[dim]Fuel figures are chemical energy; household figures "
-                  "are electricity at the meter. "
+
+    if projected is not None:
+        console.print(f"[bold]At scale:[/bold] {actors:,} x {runs_per_day:g} "
+                      f"runs/day x 365 days = {projected / 1e9:,.2f} GJ/year "
+                      f"({projected / KWH_J / 1e3:,.1f} MWh)")
+    console.print("[dim]Fuel figures are chemical energy; household and "
+                  "industrial ones are electricity at the meter. "
                   + (f"Both scaled to primary energy (x{factor:g} for "
                      "electricity)." if primary else
                      f"Pass --primary to scale electricity by x{factor:g} and "
                      "compare like with like.") + "[/dim]")
-    console.print("[dim]'avoidable' entries are waste — the difference between "
-                  "doing something well and badly — not total consumption.[/dim]")
+    console.print("[dim]'wasted' entries are avoidable overhead, not total "
+                  "consumption. Industry and national references are only "
+                  "meaningful against an aggregate — see --runs-per-day.[/dim]")
 
 
 @main.command("breakdown")

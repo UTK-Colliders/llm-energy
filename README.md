@@ -504,58 +504,99 @@ never as a slice of it. `--chart` writes a single-panel PDF on a log axis
 because a log axis has no zero for a bar to grow from, with the estimated term
 marked differently so it cannot be misread as a measurement.
 
-## Everyday reference points
+## Energy reference points
 
-Joules mean nothing to most readers, so `references` converts a run into
-things people have intuitions about:
+Joules mean nothing to most readers, so `references` converts a run into things
+people have intuitions about. Twenty-nine of them across three scales:
 
 ```sh
 uv run llm-energy references --joules 62928
+uv run llm-energy references --scale industry --scale national --joules 2e6
 ```
 
-| Reference | Energy | Basis | Kind |
-|---|---|---|---|
-| Under-inflated tyres, one commute | 1.85 MJ | fuel | wasted |
-| 65" TV on 6 h | 2.16 MJ | electricity | consumed |
-| AC 3 °F below recommended, one day | 6.48 MJ | electricity | wasted |
-| House lights on 12 h (LED) | 7.78 MJ | electricity | wasted |
-| House lights on 12 h (incandescent) | 51.8 MJ | electricity | wasted |
-| Commute, hybrid (2 × 30 min) | 65.5 MJ | fuel | consumed |
-| Commute, small sedan | 103 MJ | fuel | consumed |
-| Commute, pickup truck | 180 MJ | fuel | consumed |
-| AC 3 °F below recommended, one season | 583 MJ | electricity | wasted |
-| Under-inflated tyres, one year | 833 MJ | fuel | wasted |
+**Individual** — the same order as a research run, so the ratio reads directly:
 
-Overlay any of them on a budget chart by id:
+| | Energy | Kind |
+|---|---|---|
+| Charging a phone overnight | 0.07 MJ | consumed |
+| Boiling a kettle (1 L) | 0.39 MJ | consumed |
+| Under-inflated tyres, one commute | 1.85 MJ | wasted |
+| 65" TV on 6 h | 2.16 MJ | consumed |
+| AC 3 °F below recommended, one day | 6.48 MJ | wasted |
+| Washing one load hot instead of cold | 7.20 MJ | wasted |
+| House lights on 12 h (LED / incandescent) | 7.78 / 51.8 MJ | wasted |
+| Tumble drying one load instead of hanging it | 10.8 MJ | wasted |
+| A 10-minute hot shower | 11.1 MJ | consumed |
+| Charging a phone nightly for a year | 26.3 MJ | consumed |
+| Commute, hybrid / sedan / pickup (2 × 30 min) | 65 / 103 / 180 MJ | consumed |
+| Driving 100 miles in an EV | 103 MJ | consumed |
+| AC 3 °F below recommended, one season | 583 MJ | wasted |
+| Under-inflated tyres, one year | 833 MJ | wasted |
+| Transatlantic flight, one economy seat, return | 13.5 GJ | consumed |
+| One US home's electricity for a year | 37.8 GJ | consumed |
+
+**Industry** — six to nine orders above a run:
+
+| | Energy |
+|---|---|
+| One datacentre rack for a day | 864 MJ |
+| Smelting one tonne of steel | 20 GJ |
+| A 1 MW university cluster for a day | 86.4 GJ |
+| **The LHC running for an hour** | 720 GJ |
+| Training one frontier-scale LLM (GPT-3 scale) | 4.6 TJ |
+| A 1 MW datacentre for a year | 31.5 TJ |
+
+**National** — annual electricity for a small country:
+
+| | Energy |
+|---|---|
+| Malta, one day | 26.6 TJ |
+| Malta, one year | 9.7 PJ |
+| Estonia, one year | 30.6 PJ |
+| Iceland, one year | 70.2 PJ |
+
+### One run cannot be compared to a country
+
+A run is kJ–MJ; Malta's year is PJ. *"1/9,700,000,000 of Malta"* is not a number
+anyone can read, and quoting it would be theatre. The big references only mean
+something against an **aggregate**, so state the rate and the population:
 
 ```sh
-uv run llm-energy breakdown --session-power <p.json> --session <s.json> \
-  --reference tv-65 --reference commute-hybrid --chart budget.pdf
+uv run llm-energy references --scale national --joules 2e6 \
+  --runs-per-day 5 --actors 1000
 ```
 
-Three things the table deliberately keeps apart, because collapsing them would
-turn a measurement into an argument:
+```
+At scale: 1,000 × 5 runs/day × 365 days = 3.65 GJ/year (1.0 MWh)
+  Malta, one year of electricity    9.72 PJ    1/2,663
+```
 
-- **Basis.** Vehicle figures are the chemical energy of the fuel burned;
-  household figures are electricity at the meter. A kWh of each is not the
-  same thing — generating and delivering electricity costs roughly 2.6 kWh of
-  primary energy in the US. `--primary` puts both on one footing; without it,
-  read fuel and electricity rows against each other with care.
-- **Consumed vs wasted.** The AC setpoint and the soft tyres are *avoidable
-  overhead* — the gap between doing something well and badly. "Costs as much
-  as a commute" and "costs as much as the waste from soft tyres" are different
-  claims and the plots label which is which.
-- **Spread.** Every figure varies by a factor of two or more across vehicles,
-  climates and houses. They are order-of-magnitude anchors. The assumptions
-  behind each — mpg, watts, setpoints, hours — live in
+That is a claim worth making — a thousand researchers doing this five times a
+day for a year is a readable fraction of a small country. One run is not.
+Industry and national rows also carry a **runs to equal** column for the same
+reason: *35.1 billion runs = Iceland for a year* is legible where the inverse
+fraction is not.
+
+### What the table keeps apart
+
+- **Basis.** Vehicles and flights are chemical fuel energy; household,
+  industrial and national figures are electricity at the meter. A kWh of each
+  is not the same thing — US electricity costs roughly 2.6 kWh of primary
+  energy to deliver. `--primary` puts both on one footing.
+- **Consumed vs wasted.** The AC setpoint, soft tyres, a hot wash and the
+  tumble dryer are *avoidable overhead*. "Costs as much as a commute" and
+  "costs as much as the waste from a hot wash" are different claims.
+- **Scale.** Every reference declares whether it is individual, industry or
+  national, so a plot cannot silently put a kettle and a country on one axis
+  as though the comparison meant the same thing.
+- **Spread.** These are order-of-magnitude anchors. Assumptions live in
   [`references/everyday.yaml`](references/everyday.yaml) and are meant to be
-  edited; the arithmetic is in `references.py` and tested, so changing an
-  assumption changes the number honestly.
+  edited; the arithmetic is in `references.py` and tested.
 
-Confirm the citations in that file before publishing: they are standard
-published figures (EIA fuel energy content, EPA combined mpg, DOE thermostat
-and tyre-pressure guidance, FHWA annual mileage, EIA RECS, ENERGY STAR) but
-they are quoted from general knowledge, not fetched.
+Confirm the citations in that file before publishing — they are standard
+published figures (EIA, EPA, DOE, FHWA, ENERGY STAR, Patterson et al. 2021 for
+LLM training, national electricity statistics) but are quoted from general
+knowledge, not fetched. The LHC and national numbers are rounded hard.
 
 ## Comparing LLM models
 

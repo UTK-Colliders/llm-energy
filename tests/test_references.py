@@ -147,3 +147,89 @@ def test_a_longer_commute_scales_every_vehicle(tmp_path):
     base = {r.id: r for r in load_references(SPEC)[0]}
     for i in ("commute-pickup", "commute-sedan", "commute-hybrid"):
         assert doubled[i].joules == pytest.approx(base[i].joules * 2), i
+
+
+# --- individual choices, industry and countries -------------------------------
+
+from llm_energy.references import (INDIVIDUAL, INDUSTRY, NATIONAL,  # noqa: E402
+                                   format_count, project_annual)
+
+
+def test_kettle_is_the_heat_capacity_of_the_water(refs):
+    rs, _ = refs
+    # 1 L through 80 C at 85% efficient
+    assert rs["kettle"].joules == pytest.approx(4186 * 1.0 * 80 / 0.85)
+
+
+def test_shower_scales_with_flow_and_temperature_rise(refs):
+    rs, _ = refs
+    assert rs["shower"].joules == pytest.approx(4186 * (10 * 9.5) * 28)
+
+
+def test_a_year_of_phone_charging_is_365_nights(refs):
+    rs, _ = refs
+    assert rs["phone-year"].joules == pytest.approx(rs["phone-night"].joules * 365)
+
+
+def test_the_flight_counts_both_directions(refs):
+    rs, _ = refs
+    litres = 5550 * 2 * 3.5 / 100
+    assert rs["flight-transatlantic"].joules == pytest.approx(litres * 34.7 * MJ_J)
+    assert rs["flight-transatlantic"].basis == FUEL
+
+
+def test_laundry_and_dryer_are_avoidable_but_a_shower_is_not(refs):
+    rs, _ = refs
+    assert rs["laundry-hot"].kind == AVOIDABLE
+    assert rs["tumble-dryer"].kind == AVOIDABLE
+    assert rs["shower"].kind == ABSOLUTE
+
+
+def test_industry_references_are_power_times_time(refs):
+    rs, _ = refs
+    assert rs["lhc-hour"].joules == pytest.approx(200e6 * 3600)
+    assert rs["hpc-cluster-day"].joules == pytest.approx(1e6 * 24 * 3600)
+    assert rs["dc-rack-day"].joules == pytest.approx(10e3 * 24 * 3600)
+
+
+def test_country_year_and_day_are_consistent(refs):
+    rs, _ = refs
+    assert rs["malta-year"].joules == pytest.approx(2.7e12 * 3600)
+    assert rs["malta-day"].joules == pytest.approx(rs["malta-year"].joules / 365)
+
+
+def test_each_reference_declares_its_scale(refs):
+    rs, _ = refs
+    assert rs["kettle"].scale == INDIVIDUAL
+    assert rs["lhc-hour"].scale == INDUSTRY
+    assert rs["malta-year"].scale == NATIONAL
+
+
+def test_the_scales_really_are_orders_apart(refs):
+    """If they were not, the runs-to-equal framing would be unnecessary."""
+    rs, _ = refs
+    assert rs["lhc-hour"].joules / rs["kettle"].joules > 1e6
+    assert rs["malta-year"].joules / rs["lhc-hour"].joules > 1e3
+
+
+# --- projecting to an aggregate ----------------------------------------------
+
+def test_projection_multiplies_rate_actors_and_days():
+    assert project_annual(1e6, runs_per_day=5, actors=1000) == pytest.approx(
+        1e6 * 5 * 1000 * 365)
+
+
+def test_a_projection_brings_a_country_into_range(refs):
+    """One run against Malta is meaningless; a research programme is not."""
+    rs, _ = refs
+    one_run = 2e6
+    assert one_run / rs["malta-year"].joules < 1e-8      # unreadable
+    at_scale = project_annual(one_run, runs_per_day=5, actors=1000)
+    assert 1e-5 < at_scale / rs["malta-year"].joules < 1e-2   # a real fraction
+
+
+def test_huge_ratios_are_worded_not_written_out():
+    assert format_multiple(1 / 4.86e9) == "1/4.86 billion"
+    assert format_count(35.1e9) == "35.1 billion"
+    assert format_count(154_000) == "154 thousand"
+    assert format_count(42) == "42"
