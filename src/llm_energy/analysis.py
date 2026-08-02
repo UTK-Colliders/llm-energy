@@ -179,7 +179,38 @@ def budget_rows(budget: Budget) -> list[list[str]]:
 BUDGET_HEADERS = ["Portion", "Basis", "Energy", "Share", "Detail"]
 
 
-def render_budget_markdown(budget: Budget) -> str:
+def render_everyday_markdown(budget: Budget, refs, constants) -> list[str]:
+    """Express the budget's totals against everyday reference points.
+
+    Two rows only — the measured total and the estimated inference band —
+    because those are the quantities a reader wants scaled, and adding a row
+    per component would bury them.
+    """
+    from llm_energy.references import ABSOLUTE, compare, format_multiple
+
+    if not refs:
+        return []
+    lines = ["", "## In everyday terms", "",
+             "| Reference | Energy | Kind | Measured total | E_LLM (central) |",
+             "|---|---|---|---|---|"]
+    measured = budget.measured_total_j
+    est = budget.estimated[0].joules if budget.estimated else 0.0
+    for r, _ in compare(measured or 1.0, refs, constants):
+        m = format_multiple(measured / r.joules) if measured > 0 else "—"
+        e = format_multiple(est / r.joules) if est > 0 else "—"
+        lines.append(f"| {r.label} | {r.joules / 1e6:.2f} MJ | "
+                     f"{'consumed' if r.kind == ABSOLUTE else 'wasted'} "
+                     f"| {m} | {e} |")
+    lines += ["",
+              "Fuel references are chemical energy and household ones are "
+              "electricity at the meter; the two differ by roughly the grid's "
+              "primary-energy factor and are not interchangeable. Entries "
+              "marked *wasted* are avoidable overhead, not total consumption — "
+              "a different claim from the *consumed* ones."]
+    return lines
+
+
+def render_budget_markdown(budget: Budget, refs=None, constants=None) -> str:
     lines = [f"# Energy budget: {budget.label}", "",
              "| " + " | ".join(BUDGET_HEADERS) + " |",
              "|" + "---|" * len(BUDGET_HEADERS)]
@@ -189,8 +220,10 @@ def render_budget_markdown(budget: Budget) -> str:
               "given as a multiple of that total rather than a share of it: "
               "local SoC package energy and estimated remote datacenter energy "
               "are different quantities and do not sum.", ""]
+    if refs:
+        lines += render_everyday_markdown(budget, refs, constants or {})
     if budget.notes:
-        lines += ["## Notes", ""] + [f"- {n}" for n in budget.notes]
+        lines += ["", "## Notes", ""] + [f"- {n}" for n in budget.notes]
     return "\n".join(lines) + "\n"
 
 
@@ -218,7 +251,8 @@ def render_budget_terminal(budget: Budget) -> None:
 STYLE = Path(__file__).resolve().parent / "assets" / "tufte.mplstyle"
 
 
-def render_budget_chart(budget: Budget, path: Path) -> Path:
+def render_budget_chart(budget: Budget, path: Path,
+                        references=None) -> Path:
     """One-panel PDF: each portion's energy on a log axis, directly labelled.
 
     A dot plot, not bars. The portions span two or more orders of magnitude,
@@ -247,8 +281,13 @@ def render_budget_chart(budget: Budget, path: Path) -> Path:
     fig, ax = plt.subplots(figsize=(5.4, 0.5 * len(items) + 1.5))
     ink, faint = "#333333", "#aaaaaa"
 
+    references = list(references or [])
     values = [(c.band.high_j if c.band else c.joules) for c in items]
     lows = [(c.band.low_j if c.band else c.joules) for c in items]
+    # references stretch the axis; include them so the gap between a research
+    # run and an everyday activity is visible rather than clipped
+    values += [r.joules for r in references]
+    lows += [r.joules for r in references]
     left = min(v for v in lows if v > 0) / 3 if any(v > 0 for v in lows) else 1.0
 
     for yi, c in zip(y, items):
@@ -282,6 +321,12 @@ def render_budget_chart(budget: Budget, path: Path) -> Path:
                     color=ink)
             ax.text(mid, yi - 0.34, "estimated: low-central-high", va="top",
                     ha="center", fontsize=7.5, color=faint)
+
+    for r in references:
+        ax.axvline(r.joules, color=faint, linewidth=0.7, linestyle=(0, (2, 2)),
+                   zorder=0)
+        ax.text(r.joules, len(items) - 0.45, f" {r.label}", rotation=90,
+                va="bottom", ha="center", fontsize=7, color=faint)
 
     ax.set_yticks(y)
     ax.set_yticklabels([c.name for c in items])

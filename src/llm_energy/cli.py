@@ -590,6 +590,53 @@ def compare_deliverables(runs: tuple[tuple[str, str], ...], task_name: str,
         raise SystemExit(1)
 
 
+DEFAULT_REFERENCES = REPO_ROOT / "references" / "everyday.yaml"
+
+
+@main.command("references")
+@click.option("--file", "ref_file", type=click.Path(path_type=Path),
+              default=DEFAULT_REFERENCES, show_default=True)
+@click.option("--primary", is_flag=True,
+              help="put electricity and fuel on one primary-energy basis")
+@click.option("--joules", type=float, default=None,
+              help="also express this many Joules as a fraction of each")
+def references_cmd(ref_file: Path, primary: bool, joules: float | None):
+    """Everyday energy reference points, for putting Joules in context."""
+    from rich.table import Table
+
+    from llm_energy.references import (KWH_J, MJ_J, compare, format_multiple,
+                                       load_references)
+
+    refs, constants = load_references(ref_file)
+    factor = float(constants.get("primary_energy_factor", 1.0))
+
+    table = Table(title="everyday energy references"
+                        + (" (primary basis)" if primary else ""))
+    for col in ("Reference", "Energy", "kWh", "Basis", "Kind"):
+        table.add_column(col)
+    if joules is not None:
+        table.add_column("this run")
+
+    ranked = compare(joules if joules is not None else 1.0, refs, constants,
+                     primary=primary)
+    for r, frac in ranked:
+        e = r.primary_joules(factor) if primary else r.joules
+        row = [r.label, f"{e / MJ_J:.2f} MJ", f"{e / KWH_J:.2f}",
+               r.basis, r.kind]
+        if joules is not None:
+            row.append(format_multiple(frac))
+        table.add_row(*row)
+    console.print(table)
+    console.print("[dim]Fuel figures are chemical energy; household figures "
+                  "are electricity at the meter. "
+                  + (f"Both scaled to primary energy (x{factor:g} for "
+                     "electricity)." if primary else
+                     f"Pass --primary to scale electricity by x{factor:g} and "
+                     "compare like with like.") + "[/dim]")
+    console.print("[dim]'avoidable' entries are waste — the difference between "
+                  "doing something well and badly — not total consumption.[/dim]")
+
+
 @main.command("breakdown")
 @click.option("--label", default="run", show_default=True)
 @click.option("--task", "task_result", default=None,
@@ -604,9 +651,15 @@ def compare_deliverables(runs: tuple[tuple[str, str], ...], task_name: str,
 @click.option("--md", type=click.Path(path_type=Path), default=None)
 @click.option("--chart", type=click.Path(path_type=Path), default=None,
               help="write a single-panel PDF figure (needs the [plots] extra)")
+@click.option("--reference", "reference_ids", multiple=True,
+              help="overlay an everyday reference on the chart, by id "
+                   "(repeatable; see `llm-energy references`)")
+@click.option("--references-file", type=click.Path(path_type=Path),
+              default=DEFAULT_REFERENCES, show_default=True)
 def breakdown_cmd(label: str, task_result: Path | None,
                   session_power: Path | None, session_result: Path | None,
-                  md: Path | None, chart: Path | None):
+                  md: Path | None, chart: Path | None,
+                  reference_ids: tuple[str, ...], references_file: Path):
     """Relative energy of each portion of a run.
 
     Takes whichever artifacts exist and assembles one budget: task phases (or
@@ -633,13 +686,23 @@ def breakdown_cmd(label: str, task_result: Path | None,
         session=_load_or_die(load_session_result, session_result,
                              "session-energy") if session_result else None)
 
+    from llm_energy.references import load_references
+
+    refs, constants = load_references(references_file)
+    chosen = [r for r in refs if r.id in set(reference_ids)]
+    missing = set(reference_ids) - {r.id for r in refs}
+    if missing:
+        raise click.ClickException(
+            f"unknown reference id(s): {', '.join(sorted(missing))} — "
+            f"see `llm-energy references`")
+
     render_budget_terminal(budget)
     if md:
         md.parent.mkdir(parents=True, exist_ok=True)
-        md.write_text(render_budget_markdown(budget))
+        md.write_text(render_budget_markdown(budget, refs, constants))
         console.print(f"wrote {md}")
     if chart:
-        console.print(f"wrote {render_budget_chart(budget, chart)}")
+        console.print(f"wrote {render_budget_chart(budget, chart, chosen)}")
 
 
 @main.command("report-open")

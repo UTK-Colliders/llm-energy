@@ -484,6 +484,59 @@ never as a slice of it. `--chart` writes a single-panel PDF on a log axis
 because a log axis has no zero for a bar to grow from, with the estimated term
 marked differently so it cannot be misread as a measurement.
 
+## Everyday reference points
+
+Joules mean nothing to most readers, so `references` converts a run into
+things people have intuitions about:
+
+```sh
+uv run llm-energy references --joules 62928
+```
+
+| Reference | Energy | Basis | Kind |
+|---|---|---|---|
+| Under-inflated tyres, one commute | 1.85 MJ | fuel | wasted |
+| 65" TV on 6 h | 2.16 MJ | electricity | consumed |
+| AC 3 °F below recommended, one day | 6.48 MJ | electricity | wasted |
+| House lights on 12 h (LED) | 7.78 MJ | electricity | wasted |
+| House lights on 12 h (incandescent) | 51.8 MJ | electricity | wasted |
+| Commute, hybrid (2 × 30 min) | 65.5 MJ | fuel | consumed |
+| Commute, small sedan | 103 MJ | fuel | consumed |
+| Commute, pickup truck | 180 MJ | fuel | consumed |
+| AC 3 °F below recommended, one season | 583 MJ | electricity | wasted |
+| Under-inflated tyres, one year | 833 MJ | fuel | wasted |
+
+Overlay any of them on a budget chart by id:
+
+```sh
+uv run llm-energy breakdown --session-power <p.json> --session <s.json> \
+  --reference tv-65 --reference commute-hybrid --chart budget.pdf
+```
+
+Three things the table deliberately keeps apart, because collapsing them would
+turn a measurement into an argument:
+
+- **Basis.** Vehicle figures are the chemical energy of the fuel burned;
+  household figures are electricity at the meter. A kWh of each is not the
+  same thing — generating and delivering electricity costs roughly 2.6 kWh of
+  primary energy in the US. `--primary` puts both on one footing; without it,
+  read fuel and electricity rows against each other with care.
+- **Consumed vs wasted.** The AC setpoint and the soft tyres are *avoidable
+  overhead* — the gap between doing something well and badly. "Costs as much
+  as a commute" and "costs as much as the waste from soft tyres" are different
+  claims and the plots label which is which.
+- **Spread.** Every figure varies by a factor of two or more across vehicles,
+  climates and houses. They are order-of-magnitude anchors. The assumptions
+  behind each — mpg, watts, setpoints, hours — live in
+  [`references/everyday.yaml`](references/everyday.yaml) and are meant to be
+  edited; the arithmetic is in `references.py` and tested, so changing an
+  assumption changes the number honestly.
+
+Confirm the citations in that file before publishing: they are standard
+published figures (EIA fuel energy content, EPA combined mpg, DOE thermostat
+and tyre-pressure guidance, FHWA annual mileage, EIA RECS, ENERGY STAR) but
+they are quoted from general knowledge, not fetched.
+
 ## Comparing LLM models
 
 One run per model — same brief, same pinned physics, different coordinator:

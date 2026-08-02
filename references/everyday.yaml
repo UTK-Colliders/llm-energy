@@ -1,0 +1,86 @@
+# Everyday energy reference points, for putting a run's Joules in context.
+#
+# These are INPUTS, not results: the arithmetic lives in
+# src/llm_energy/references.py so it is testable, and every figure below is a
+# typical value with real spread. Change them to match your own assumptions —
+# the point of the file is that the assumptions are visible and editable
+# rather than baked into a plot.
+#
+# THREE THINGS TO KEEP STRAIGHT
+#
+# 1. Basis. Vehicle figures are the *chemical energy of the fuel burned*.
+#    Household figures are *delivered electricity at the meter*. These are not
+#    the same accounting: a kWh of electricity took roughly 2.5-3 kWh of
+#    primary energy to generate and deliver in the US. Set
+#    primary_energy_factor below and use the primary-energy view if you want
+#    everything on one footing. Each reference carries its basis so a plot can
+#    label it.
+#
+# 2. Absolute vs avoidable. A commute is energy *consumed*; the AC setpoint
+#    and the under-inflated tyres are energy *wasted* — the difference between
+#    doing a thing well and doing it badly. Comparing a research run against
+#    avoidable waste is a different rhetorical claim from comparing it against
+#    total consumption, and the two should not sit unlabelled on one axis.
+#
+# 3. Spread. Every one of these varies by a factor of two or more across
+#    vehicles, climates, houses and habits. They are order-of-magnitude
+#    anchors, not measurements. `low`/`high` variants are given where the
+#    range materially changes the comparison.
+#
+# SOURCES (verify before publication; figures are as commonly published)
+#   - Gasoline energy content: US EIA, ~112-116k Btu/gal lower heating value
+#     for E10 motor gasoline.
+#   - Fuel economy: EPA combined ratings for representative current models.
+#   - Thermostat setpoint: US DOE recommends 78 F for summer cooling and
+#     quotes roughly 3% cooling energy per degree F of setback.
+#   - Tyre pressure: US DOE/EPA fueleconomy.gov, ~0.2% fuel economy loss per
+#     1 psi below the recommended average pressure.
+#   - Annual driving: US FHWA, ~13,500 miles/year per driver.
+#   - Household cooling and lighting: US EIA RECS.
+#   - TV power: ENERGY STAR certified 65-inch on-mode power.
+
+schema_version: 1
+
+constants:
+  # lower heating value; HHV is ~5% higher, and E10 is ~3% lower than E0
+  gasoline_mj_per_gallon: 120.0
+  # multiply delivered electricity by this for a primary-energy view
+  # (US average generation + transmission losses)
+  primary_energy_factor: 2.6
+
+commute:
+  minutes_each_way: 30
+  trips_per_day: 2
+  # a 30-minute US commute averages roughly 30 mph door to door once traffic
+  # is included, so ~15 miles each way
+  average_speed_mph: 30
+  vehicles:
+    pickup:  {label: "pickup truck", mpg: 20}
+    sedan:   {label: "small sedan",  mpg: 35}
+    hybrid:  {label: "hybrid",       mpg: 55}
+
+air_conditioning:
+  # whole-home central AC on a hot day, ~2000 sq ft in a warm climate
+  cooling_kwh_per_day: 20.0
+  recommended_setpoint_f: 78
+  degrees_below: 3
+  percent_per_degree_f: 3.0
+  cooling_season_days: 90
+
+tyres:
+  psi_below_recommended: 9        # e.g. 26 psi against a 35 psi placard
+  percent_economy_loss_per_psi: 0.2
+  annual_miles: 13500
+  vehicle: sedan                  # which of commute.vehicles to charge it to
+
+lighting:
+  hours: 12
+  bulbs: 20
+  led_watts: 9
+  incandescent_watts: 60          # the same house before an LED retrofit
+
+television:
+  hours: 6
+  watts: 100                      # modern 65-inch LED; OLED in HDR is higher
+  low_watts: 70
+  high_watts: 150
