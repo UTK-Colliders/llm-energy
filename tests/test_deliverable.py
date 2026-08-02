@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from llm_energy.deliverable import find_deliverable, verify_lhe
+from llm_energy.deliverable import (find_deliverable, find_histogram,
+                                    find_plot, verify_lhe)
 
 INIT = "2212 2212 6.8e+03 6.8e+03 0 0 247000 247000 -4 1"
 
@@ -441,3 +442,67 @@ def test_a_plot_under_any_name_and_format_counts(tmp_path):
     g = grade_workspace(open_spec(), tmp_path)
     assert not g.plot_missing
     assert any("mtop.png" in n for n in g.notes)
+
+
+# --- the generator's own working tree is not the deliverable ------------------
+
+def madgraph_tree(root, real_events=10000, real=True):
+    """A workspace shaped like MadGraph's, scratch files and all."""
+    scratch = root / "ttbar2j" / "SubProcesses" / "P1_gg_ttxgg_t_bwp_tx_bxwm"
+    (scratch / "Hel").mkdir(parents=True)
+    # MadGraph leaves an empty events.lhe here; it looks like a deliverable
+    (scratch / "Hel" / "events.lhe").write_text(
+        "<LesHouchesEvents>\n</LesHouchesEvents>\n")
+    (scratch / "card.jpg").write_bytes(b"\xff\xd8\xff" + b"x" * 40000)
+    if real:
+        out = root / "ttbar2j" / "Events" / "run_01"
+        out.mkdir(parents=True)
+        write_lhe(out / "unweighted_events.lhe.gz", n=real_events, gz=True,
+                  ev=event_2j())
+    return root
+
+
+def test_an_empty_scratch_lhe_is_not_chosen_over_the_real_sample(tmp_path):
+    """The exact failure from a real run: a zero-event Hel/events.lhe was
+    graded, failed on the event count, and passed the final-state check."""
+    madgraph_tree(tmp_path, real_events=50)
+    chosen = find_deliverable(tmp_path)[0]
+    assert chosen.name.startswith("unweighted_events")
+    assert "SubProcesses" not in str(chosen)
+
+
+def test_an_empty_lhe_fails_the_final_state_check(tmp_path):
+    """'every event is t t~ + 2 jets' is vacuously true of no events."""
+    (tmp_path / "empty.lhe").write_text("<LesHouchesEvents>\n</LesHouchesEvents>\n")
+    r = verify_lhe(tmp_path / "empty.lhe", nevents=10000,
+                   beam_energy_gev=6800.0, n_extra_jets=2)
+    assert not r.ok
+    fs = [c for c in r.failures if c.name == "final state"]
+    assert fs and "no events to check" in fs[0].detail
+
+
+def test_a_generator_diagram_is_not_the_agents_plot(tmp_path):
+    """card.jpg under SubProcesses/ is MadGraph's own output, not a result."""
+    madgraph_tree(tmp_path)
+    (tmp_path / "top_mass.pdf").write_bytes(b"%PDF-1.4 small")
+    assert find_plot(tmp_path).name == "top_mass.pdf"
+
+
+def test_with_only_scratch_files_the_plot_search_finds_nothing(tmp_path):
+    madgraph_tree(tmp_path, real=False)
+    assert find_plot(tmp_path) is None
+
+
+def test_scratch_is_still_offered_when_it_is_all_there_is(tmp_path):
+    """Ranked last, but not hidden — the operator should see what was found."""
+    madgraph_tree(tmp_path, real=False)
+    found = find_deliverable(tmp_path)
+    assert found and "SubProcesses" in str(found[0])
+
+
+def test_a_histogram_in_the_generator_tree_is_ignored(tmp_path):
+    madgraph_tree(tmp_path)
+    scratch = tmp_path / "ttbar2j" / "SubProcesses" / "P1_gg_ttxgg_t_bwp_tx_bxwm"
+    (scratch / "results.json").write_text(
+        json.dumps({"bin_edges_gev": [1, 2, 3], "counts": [4, 5]}))
+    assert find_histogram(tmp_path) is None

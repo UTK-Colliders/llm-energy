@@ -187,7 +187,12 @@ if [ "$OPEN" -eq 1 ]; then
   uv run llm-energy analyze-session --for-session-power "$SESSION_POWER" \
                                     --out-file "$SESSION_ENERGY"
 
-  if ! grep -q '"containers": \[[^]]' "$SESSION_POWER" 2>/dev/null; then
+  # The result JSON is pretty-printed, so `"containers": [` is followed by a
+  # newline and a line-oriented grep never sees an entry. Ask the parser.
+  if ! uv run python -c '
+import json, sys
+print("yes" if json.load(open(sys.argv[1]))["containers"] else "")
+' "$SESSION_POWER" | grep -q yes; then
     echo
     echo "note: the agent started no containers at all. If the deliverables are"
     echo "      also missing, it never got as far as running anything — check"

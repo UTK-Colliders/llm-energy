@@ -431,30 +431,6 @@ verdicts whether the trials produced **identical physics output**:
   with a relative tolerance (default 1e-9) to distinguish "different last-ulp
   formatting" (e.g. cross-architecture runs) from genuinely different events.
 
-## Reading the portions against each other
-
-`llm-energy breakdown` assembles the artifacts a run produced into a single
-budget: task phases (or, for an open run, the observed containers), the local
-coordination term, and the estimated inference band.
-
-Two rules govern it, both there to stop a number being read as something it
-is not.
-
-**Shares are computed only within the measured group.** Compilation, event
-generation and local coordination are all SoC package energy on the same
-instrument, so their proportions are meaningful. The inference term is
-estimated remote datacenter energy including PUE; it is reported as a multiple
-of the measured total, never as a share of it, and never added into that
-total. A single pie over both would imply a common footing that does not
-exist.
-
-**The figure is a dot plot on a log axis.** The portions routinely differ by
-two orders of magnitude, which forces a log scale; a bar on a log axis has no
-zero to grow from, so its length would encode nothing while still reading as a
-proportion. Position carries the value instead. The estimated term is drawn as
-its low-central-high range with an open marker — a deliberately different mark
-from the measured points.
-
 ## Comparability caveats (restated in every report)
 
 1. E_task is SoC package energy; E_LLM is estimated total datacenter energy

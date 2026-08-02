@@ -129,9 +129,15 @@ def verify_lhe(path: Path,
     check("event count", n == nevents, f"{n} events, wanted {nevents}")
     if unparsed:
         check("event records parse", False, f"{unparsed} unparsable event(s)")
-    check("final state", bad_fs is None,
-          f"every event is {wanted_desc}" if bad_fs is None
-          else f"wanted {wanted_desc}; {bad_fs}")
+    if n == 0:
+        # "every event is t t~ + 2 jets" is vacuously true of no events, and
+        # reads as a pass. An empty file has not been checked, it has nothing
+        # to check.
+        check("final state", False, "no events to check")
+    else:
+        check("final state", bad_fs is None,
+              f"every event is {wanted_desc}" if bad_fs is None
+              else f"wanted {wanted_desc}; {bad_fs}")
 
     if n:
         report.n_events, report.events_sha256 = event_summary(path)
@@ -377,7 +383,8 @@ def load_open_spec(task_dir: Path) -> OpenSpec:
 
 def find_histogram(root: Path) -> Path | None:
     """The JSON under `root` that parses as a histogram, largest first."""
-    for p in sorted((q for q in root.glob("**/*.json") if q.is_file()),
+    for p in sorted((q for q in root.glob("**/*.json")
+                     if q.is_file() and not _is_scratch(q, root)),
                     key=lambda q: q.stat().st_size, reverse=True):
         try:
             edges, counts = extract_histogram(json.loads(p.read_text()))
@@ -388,30 +395,61 @@ def find_histogram(root: Path) -> Path | None:
     return None
 
 
-def find_plot(root: Path) -> Path | None:
-    """Any figure the agent left behind."""
-    for pat in ("**/*.pdf", "**/*.png", "**/*.svg", "**/*.jpg"):
-        found = sorted((p for p in root.glob(pat) if p.is_file()),
-                       key=lambda p: p.stat().st_size, reverse=True)
-        if found:
-            return found[0]
-    return None
+# Directories a generator fills with its own working files. MadGraph leaves
+# zero-event `events.lhe` scratch files under SubProcesses/*/Hel/ and diagram
+# images under the same tree; grading those answers a question nobody asked.
+SCRATCH_DIRS = frozenset({
+    "SubProcesses", "Source", "lib", "Cards", "bin", "Hel", "MCatNLO",
+    "HTML", "madevent", "internal", "Template", "__pycache__",
+})
+
+
+def _is_scratch(path: Path, root: Path) -> bool:
+    try:
+        parts = path.relative_to(root).parts[:-1]
+    except ValueError:
+        return False
+    return any(p in SCRATCH_DIRS for p in parts)
 
 
 def find_deliverable(root: Path, patterns: tuple[str, ...] =
                      ("**/*.lhe.gz", "**/*.lhe")) -> list[Path]:
-    """Candidate LHE files under a workspace, largest first.
+    """Candidate LHE files under a workspace, most events first.
 
-    The agent chose where to put things, so the operator should not have to go
-    looking. Largest first because a real 10k-event sample outweighs any
-    test-run leftovers beside it.
+    Ranked by how many events actually parse, not by file size. A generator's
+    working tree is full of plausible-looking LHE files with nothing in them,
+    and picking one of those produced a report that failed on "0 events" while
+    passing the final-state check — the wrong file graded convincingly.
+    Generator scratch directories are skipped outright; a file inside one is
+    only considered if nothing else exists at all.
     """
     seen: list[Path] = []
     for pat in patterns:
         for p in root.glob(pat):
             if p.is_file() and p not in seen:
                 seen.append(p)
-    return sorted(seen, key=lambda p: p.stat().st_size, reverse=True)
+
+    def rank(p: Path):
+        try:
+            n = sum(1 for _ in iter_events(p))
+        except (OSError, EOFError):
+            n = 0
+        # real output first, then anything with events, then by size
+        return (0 if _is_scratch(p, root) else 1, n, p.stat().st_size)
+
+    return sorted(seen, key=rank, reverse=True)
+
+
+def find_plot(root: Path) -> Path | None:
+    """A figure the agent produced, ignoring the generator's own images."""
+    best: Path | None = None
+    for pat in ("**/*.pdf", "**/*.png", "**/*.svg", "**/*.jpg"):
+        for p in root.glob(pat):
+            if not p.is_file() or _is_scratch(p, root):
+                continue
+            if best is None or p.stat().st_size > best.stat().st_size:
+                best = p
+    return best
 
 
 @dataclass

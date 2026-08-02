@@ -470,134 +470,6 @@ phases:
 Phases share the run directory and run in order; a failed phase skips the rest.
 `command:` remains valid and is reported as a single phase named `run`.
 
-## Where the energy went
-
-`breakdown` assembles whichever artifacts a run produced into one budget, so
-the portions can be read against each other:
-
-```sh
-uv run llm-energy breakdown --label madgraph-ttbar2j-split \
-  --task results/task-....json \
-  --session-power results/power-session-....json \
-  --session results/session-....json \
-  --md results/budget.md --chart results/budget.pdf
-```
-
-| Portion | Basis | Energy | Share |
-|---|---|---|---|
-| codegen-compile | measured | 3100 J (0.861 Wh) | 28.4% |
-| event-generation | measured | 900 J (0.250 Wh) | 8.3% |
-| coordination (local) | measured | 6900 J (1.917 Wh) | 63.3% |
-| **total measured** | | **10900 J (3.028 Wh)** | **100%** |
-| LLM inference | estimated | 45000 / 180000 / 720000 J | 4.1× / 16.5× / 66.1× of measured |
-
-It adapts to what it is given: a split task contributes one portion per phase,
-a single-phase task one, an open run contributes compute-in-containers and
-coordination, and the token result contributes the inference band. Any subset
-of the three artifacts works.
-
-**Shares are within the measured group only.** Local SoC package energy and
-estimated remote datacenter energy are different quantities and are never
-summed — the estimated term is reported as a *multiple* of the measured total,
-never as a slice of it. `--chart` writes a single-panel PDF on a log axis
-(the portions span orders of magnitude), drawn as a dot plot rather than bars
-because a log axis has no zero for a bar to grow from, with the estimated term
-marked differently so it cannot be misread as a measurement.
-
-## Energy reference points
-
-Joules mean nothing to most readers, so `references` converts a run into things
-people have intuitions about. Twenty-nine of them across three scales:
-
-```sh
-uv run llm-energy references --joules 62928
-uv run llm-energy references --scale industry --scale national --joules 2e6
-```
-
-**Individual** — the same order as a research run, so the ratio reads directly:
-
-| | Energy | Kind |
-|---|---|---|
-| Charging a phone overnight | 0.07 MJ | consumed |
-| Boiling a kettle (1 L) | 0.39 MJ | consumed |
-| Under-inflated tyres, one commute | 1.85 MJ | wasted |
-| 65" TV on 6 h | 2.16 MJ | consumed |
-| AC 3 °F below recommended, one day | 6.48 MJ | wasted |
-| Washing one load hot instead of cold | 7.20 MJ | wasted |
-| House lights on 12 h (LED / incandescent) | 7.78 / 51.8 MJ | wasted |
-| Tumble drying one load instead of hanging it | 10.8 MJ | wasted |
-| A 10-minute hot shower | 11.1 MJ | consumed |
-| Charging a phone nightly for a year | 26.3 MJ | consumed |
-| Commute, hybrid / sedan / pickup (2 × 30 min) | 65 / 103 / 180 MJ | consumed |
-| Driving 100 miles in an EV | 103 MJ | consumed |
-| AC 3 °F below recommended, one season | 583 MJ | wasted |
-| Under-inflated tyres, one year | 833 MJ | wasted |
-| Transatlantic flight, one economy seat, return | 13.5 GJ | consumed |
-| One US home's electricity for a year | 37.8 GJ | consumed |
-
-**Industry** — six to nine orders above a run:
-
-| | Energy |
-|---|---|
-| One datacentre rack for a day | 864 MJ |
-| Smelting one tonne of steel | 20 GJ |
-| A 1 MW university cluster for a day | 86.4 GJ |
-| **The LHC running for an hour** | 720 GJ |
-| Training one frontier-scale LLM (GPT-3 scale) | 4.6 TJ |
-| A 1 MW datacentre for a year | 31.5 TJ |
-
-**National** — annual electricity for a small country:
-
-| | Energy |
-|---|---|
-| Malta, one day | 26.6 TJ |
-| Malta, one year | 9.7 PJ |
-| Estonia, one year | 30.6 PJ |
-| Iceland, one year | 70.2 PJ |
-
-### One run cannot be compared to a country
-
-A run is kJ–MJ; Malta's year is PJ. *"1/9,700,000,000 of Malta"* is not a number
-anyone can read, and quoting it would be theatre. The big references only mean
-something against an **aggregate**, so state the rate and the population:
-
-```sh
-uv run llm-energy references --scale national --joules 2e6 \
-  --runs-per-day 5 --actors 1000
-```
-
-```
-At scale: 1,000 × 5 runs/day × 365 days = 3.65 GJ/year (1.0 MWh)
-  Malta, one year of electricity    9.72 PJ    1/2,663
-```
-
-That is a claim worth making — a thousand researchers doing this five times a
-day for a year is a readable fraction of a small country. One run is not.
-Industry and national rows also carry a **runs to equal** column for the same
-reason: *35.1 billion runs = Iceland for a year* is legible where the inverse
-fraction is not.
-
-### What the table keeps apart
-
-- **Basis.** Vehicles and flights are chemical fuel energy; household,
-  industrial and national figures are electricity at the meter. A kWh of each
-  is not the same thing — US electricity costs roughly 2.6 kWh of primary
-  energy to deliver. `--primary` puts both on one footing.
-- **Consumed vs wasted.** The AC setpoint, soft tyres, a hot wash and the
-  tumble dryer are *avoidable overhead*. "Costs as much as a commute" and
-  "costs as much as the waste from a hot wash" are different claims.
-- **Scale.** Every reference declares whether it is individual, industry or
-  national, so a plot cannot silently put a kettle and a country on one axis
-  as though the comparison meant the same thing.
-- **Spread.** These are order-of-magnitude anchors. Assumptions live in
-  [`references/everyday.yaml`](references/everyday.yaml) and are meant to be
-  edited; the arithmetic is in `references.py` and tested.
-
-Confirm the citations in that file before publishing — they are standard
-published figures (EIA, EPA, DOE, FHWA, ENERGY STAR, Patterson et al. 2021 for
-LLM training, national electricity statistics) but are quoted from general
-knowledge, not fetched. The LHC and national numbers are rounded hard.
-
 ## Comparing LLM models
 
 One run per model — same brief, same pinned physics, different coordinator:
@@ -642,7 +514,10 @@ timestamps/hostnames are ignored) and falls back to numeric comparison with
 | `list-sessions` | List Claude Code sessions on this machine |
 | `analyze-session` | Token counts → energy band (`--for-task` pairs exactly; merge with repeated `--session-id`) |
 | `find-task-result` | The task run a `measure-session` result coordinated |
+| `verify-deliverable` | Grade an open run's workspace against the task's `spec.yaml` |
+| `compare-deliverables` | Two open runs side by side: same physics or not |
 | `report` | Task run vs. coordination session, plus `--session-power` for local cost |
+| `report-open` | Same, for an open run: observed containers instead of a task result |
 | `compare` | Multiple model trials side by side + event identity |
 | `verify-events` | Check LHE files for identical physics events |
 
