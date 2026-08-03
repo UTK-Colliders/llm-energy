@@ -569,8 +569,21 @@ def open_rows(sp: SessionPowerResult, se: SessionEnergyResult,
             # to the whole. "nan%" was the old way of saying they did not.
             share = (f", {100.0 * outside / total:.1f}% of the session"
                      if total > 0 and outside >= 0 else "")
-            rows.append((f"E_coord,local (outside containers, {basis})",
-                         f"{outside:.1f} J ({_wh(outside):.3f} Wh){share}"))
+            resolution = sp.coordination_resolution_j()
+            if sp.coordination_is_zero():
+                # An agent waiting on the network draws what an idle machine
+                # draws. The difference is real arithmetic on noise, and
+                # printing it alone invites someone to quote a negative
+                # coordination energy, or a positive one that is equally
+                # meaningless.
+                rows.append((f"E_coord,local (outside containers, {basis})",
+                             f"{outside:.1f} J — consistent with zero "
+                             f"(±{resolution:.0f} J from the baseline's own "
+                             f"scatter over this window)"))
+            else:
+                rows.append((f"E_coord,local (outside containers, {basis})",
+                             f"{outside:.1f} J ({_wh(outside):.3f} Wh){share}"
+                             + (f" ±{resolution:.0f} J" if resolution else "")))
     rows += [
         ("LLM model(s)", ", ".join(m.model for m in se.usage.per_model)),
         ("LLM tokens (in/out/cache-create/cache-read)",

@@ -203,6 +203,11 @@ class SessionPowerResult:
     # False when the sampler died mid-session: the session ids remain valid
     # but every energy figure here must be ignored
     power_ok: bool = True
+    # Dispersion of the baseline capture. Sets the resolution of every net
+    # figure derived from it: subtracting a 0.48 +/- 0.10 W floor from a
+    # 2700 s window carries about +/-270 J of slack before the answer means
+    # anything, and a coordination term smaller than that is a zero.
+    baseline_std_w: float | None = None
     started_at: str = ""
     ended_at: str = ""
     # sessions whose transcript began inside the measured window
@@ -253,6 +258,27 @@ class SessionPowerResult:
             return outside
         idle_s = self.wall_time_s - (self.container_wall_s or 0.0)
         return outside - self.baseline_mean_w * idle_s
+
+    def coordination_resolution_j(self) -> float | None:
+        """How small a coordination figure has to be before it means nothing.
+
+        E_coord,local is the difference of two nearly equal numbers: what the
+        machine drew outside the containers, and what an idle machine would
+        have drawn over the same stretch. When an agent spends that stretch
+        waiting on the network those two agree to within the baseline's own
+        scatter, and the difference is noise wearing the units of energy.
+        """
+        if self.baseline_std_w is None or not self.baseline_usable():
+            return None
+        idle_s = self.wall_time_s - (self.container_wall_s or 0.0)
+        return abs(self.baseline_std_w) * max(idle_s, 0.0)
+
+    def coordination_is_zero(self) -> bool:
+        """True when E_coord,local is smaller than the baseline's own noise."""
+        outside = self.outside_container_joules()
+        resolution = self.coordination_resolution_j()
+        return (outside is not None and resolution is not None
+                and abs(outside) < resolution)
 
     def container_net_joules(self) -> float | None:
         """Container energy net of the idle baseline over their windows."""

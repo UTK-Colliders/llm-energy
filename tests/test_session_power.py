@@ -420,3 +420,71 @@ def test_the_rejection_is_recorded_when_the_session_is_measured(patched, tmp_pat
     # the recorded net stays in the JSON as captured; it is the accessors and
     # the report that refuse to present it
     assert res.net_joules is not None and res.net_joules < 0
+
+
+# --- a coordination term smaller than the instrument's resolution ------------
+
+def sonnet_run(std_w=0.10):
+    """The first open run to finish: 3 h, MadGraph for 76% of it.
+
+    Outside the container the Mac drew 0.422 W against a 0.477 W idle floor —
+    an agent waiting on the network costs this machine nothing measurable, and
+    the arithmetic lands 149 J below zero.
+    """
+    from llm_energy.schemas import SessionPowerResult
+    return SessionPowerResult(
+        command=["claude"], wall_time_s=11079.0, gross_joules=38855.0,
+        baseline_ref="b.json", baseline_mean_w=0.4772, baseline_std_w=std_w,
+        net_joules=33568.1, mean_power_w=3.51, alignment_uncertainty_j=3.51,
+        backend="powermetrics", exit_code=0,
+        container_joules=37723.2, container_wall_s=8395.0)
+
+
+def test_a_coordination_term_inside_the_noise_is_reported_as_zero():
+    sp = sonnet_run(std_w=0.10)
+    assert sp.outside_container_joules() == pytest.approx(-149.0, abs=2.0)
+    # 0.10 W of baseline scatter over the 2684 s spent outside containers
+    assert sp.coordination_resolution_j() == pytest.approx(268.4, abs=1.0)
+    assert sp.coordination_is_zero()
+
+
+def test_a_tight_baseline_makes_the_same_number_meaningful():
+    """Resolution follows the instrument, not the sign of the answer."""
+    sp = sonnet_run(std_w=0.01)
+    assert sp.coordination_resolution_j() == pytest.approx(26.8, abs=0.5)
+    assert not sp.coordination_is_zero(), "149 J against 27 J of noise is real"
+
+
+def test_no_baseline_scatter_means_no_resolution_claim():
+    sp = sonnet_run()
+    sp.baseline_std_w = None
+    assert sp.coordination_resolution_j() is None
+    assert not sp.coordination_is_zero()
+
+
+def test_the_report_does_not_print_a_bare_negative_coordination_energy():
+    from llm_energy.report import open_rows
+
+    sp = sonnet_run(std_w=0.10)
+    rows = dict(open_rows(sp, make_session_energy()))
+    key = [k for k in rows if k.startswith("E_coord,local")][0]
+    assert "consistent with zero" in rows[key]
+    assert "±268 J" in rows[key]
+
+
+def make_session_energy():
+    from llm_energy.schemas import (EnergyBand, ModelUsage, SessionEnergyResult,
+                                    SessionUsage)
+    return SessionEnergyResult(
+        usage=SessionUsage(per_model=[ModelUsage(model="claude-sonnet-5")]),
+        total_band=EnergyBand(low_j=1.0, central_j=2.0, high_j=3.0),
+        coefficients_file="c.yaml", coefficients_sha256="x")
+
+
+def test_the_baseline_scatter_is_carried_onto_the_result(tmp_path, patched):
+    baseline = BaselineResult(
+        duration_s=30.0, mean_w=0.4, std_w=0.07, joules=12.0, n_samples=30,
+        min_w=0.3, max_w=0.5, backend="canned", docker_running=True,
+        machine=MachineInfo(chip="test"))
+    res = run(CannedBackend(watts=2.0, n=10), tmp_path, baseline=baseline)
+    assert res.baseline_std_w == pytest.approx(0.07)

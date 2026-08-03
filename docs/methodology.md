@@ -357,6 +357,28 @@ is shown only when both parts are positive and sum to the whole. Otherwise the
 split is not a partition of anything and the figure is omitted rather than
 printed as `nan%`.
 
+### The resolution of E_coord,local
+
+E_coord,local is the difference of two nearly equal numbers: what the machine
+drew outside the containers, and what an idle machine would have drawn over
+the same stretch. An agent that spends that stretch waiting on the network
+makes those two agree closely, and the remainder is the baseline's own scatter
+wearing the units of energy — it can come out either sign.
+
+The report therefore carries the resolution alongside the figure: the
+baseline's standard deviation over the out-of-container window. When the
+coordination term is smaller than that, it is labelled *consistent with zero*
+rather than printed alone. One measured run drew 0.422 W outside its container
+against a 0.477 W idle floor over 2684 s, giving −149 J against a resolution
+of roughly ±270 J. The honest reading is that this machine's cost of hosting
+the agent was below what the instrument can see, not that the agent generated
+energy.
+
+This is a real result rather than a defect, and it is worth stating plainly:
+on the coordinating machine, an agent's local footprint while it thinks is
+close to nothing. Both terms that matter are elsewhere — in the container, and
+in the datacenter.
+
 This closes a gap the token-only pipeline leaves open. E_LLM covers estimated
 *remote* inference; it says nothing about the laptop running hot for forty
 minutes while the agent reads files and runs commands. E_coord,local is

@@ -97,9 +97,10 @@ def measure_session(command: list[str],
     mean_w = gross_j / wall_time_s if wall_time_s > 0 else 0.0
 
     net_j = None
-    baseline_mean_w = None
+    baseline_mean_w = baseline_std_w = None
     if baseline is not None and power_ok:
         baseline_mean_w = baseline.mean_w
+        baseline_std_w = baseline.std_w
         net_j = gross_j - baseline.mean_w * wall_time_s
         if baseline.mean_w >= mean_w:
             # An idle floor above the session's own mean draw is not an idle
@@ -202,6 +203,7 @@ def measure_session(command: list[str],
         gross_joules=gross_j,
         baseline_ref=baseline_ref,
         baseline_mean_w=baseline_mean_w,
+        baseline_std_w=baseline_std_w,
         net_joules=net_j,
         mean_power_w=mean_w,
         alignment_uncertainty_j=mean_w * interval_s,
